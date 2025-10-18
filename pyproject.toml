@@ -1,0 +1,94 @@
+[build-system]
+requires = ["uv_build>=0.8.0,<0.9.0"]
+build-backend = "uv_build"
+
+[project]
+name = "fastapi-typed-client"
+version = "0.1.0"
+authors = [
+    { name = "Lukas Schmelzeisen", email = "me@lschmelzeisen.com" }
+]
+description = "Generate a fully-typed client for your FastAPI app with the Pydantic models from your code (mostly for testing)"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+keywords = ["fastapi", "client", "testing", "typed", "httpx", "pydantic", "api-client"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: AnyIO",
+    "Framework :: FastAPI",
+    "Framework :: Pydantic",
+    "Framework :: Pydantic :: 2",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Utilities",
+    "Typing :: Typed",
+]
+dependencies = [
+    "fastapi>=0.119.0",
+    "httpx>=0.28.1",
+    "pydantic>=2.12.2",
+    "rich>=14.2.0",
+    "typer>=0.19.2",
+]
+
+[dependency-groups]
+dev = [
+    "anyio>=4.11.0",
+    "pyrefly>=0.37.0",
+    "pytest>=8.4.2",
+    "pytest-mock>=3.15.1",
+    "ruff>=0.14.0",
+]
+
+[project.urls]
+source = "https://github.com/lschmelzeisen/fastapi-typed-client"
+issues = "https://github.com/lschmelzeisen/fastapi-typed-client/issues"
+changelog = "https://github.com/lschmelzeisen/fastapi-typed-client/blob/main/CHANGELOG.md"
+
+[project.scripts]
+fastapi-typed-client = "fastapi_typed_client.cli:app"
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers"]
+anyio_mode = "auto"
+testpaths = ["tests"]
+xfail_strict = true
+
+[tool.pyrefly]
+python-version = "3.12"
+infer-with-first-use = false
+search-path = ["src", "tests", "examples"]
+
+[tool.ruff.lint]
+select = ["A", "ANN", "ASYNC", "ARG", "B", "BLE", "C4", "C90", "DTZ", "E4", "E7", "E9", "ERA", "I", "INP", "F", "FAST", "FURB", "LOG", "N", "PIE", "PT", "PTH", "PYI", "RET", "RUF", "S", "SIM", "SLF", "SLOT", "T10", "T20", "UP", "YTT"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"] # Allow asserts in tests.
+"examples/**/*.py" = ["INP001"] # Dont require __init__.py for examples.
+"examples/**/test_*.py" = ["S101"] # Allow asserts in examples tests.
+
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
+explicit = true

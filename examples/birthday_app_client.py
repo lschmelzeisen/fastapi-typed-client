@@ -1,0 +1,289 @@
+from collections.abc import (
+    Iterator,
+    Mapping,
+    Sequence,
+)
+from contextlib import contextmanager
+from http import (
+    HTTPMethod,
+    HTTPStatus,
+)
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    NamedTuple,
+    Self,
+    TypedDict,
+    overload,
+)
+from warnings import warn
+
+from fastapi.encoders import jsonable_encoder
+from httpx import (
+    USE_CLIENT_DEFAULT,
+    Client,
+    Response,
+    Timeout,
+)
+from pydantic import (
+    BaseModel,
+    TypeAdapter,
+)
+
+from birthday_app import (
+    BirthdayData,
+    GetBirthdayError,
+)
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+
+class BirthdayAppClientExtensions(TypedDict, total=False):
+    timeout: (
+        float
+        | tuple[float | None, float | None, float | None, float | None]
+        | Timeout
+        | None
+    )
+
+
+class BirthdayAppClientResult[Status: HTTPStatus, Model](NamedTuple):
+    status: Status
+    data: Model
+    model: type[Model]
+    response: Response
+
+
+class BirthdayAppClientValidationError(BaseModel):
+    loc: Sequence[str | int]
+    msg: str
+    type: str
+
+
+class BirthdayAppClientHTTPValidationError(BaseModel):
+    detail: Sequence[BirthdayAppClientValidationError]
+
+
+class BirthdayAppClientNotDefaultStatusError(Exception):
+    def __init__(
+        self,
+        *,
+        default_status: HTTPStatus,
+        result: BirthdayAppClientResult[HTTPStatus, Any],
+    ) -> None:
+        super().__init__(
+            f"Expected default status {default_status.value} {default_status.phrase}, "
+            f"but received {result.status.value} {result.status.phrase}."
+        )
+        self.default_status = default_status
+        self.result = result
+
+
+BIRTHDAY_APP_CLIENT_NOT_REQUIRED: Any = ...
+
+
+class BirthdayAppClient:
+    def __init__(self, client: Client) -> None:
+        self.client = client
+
+    @classmethod
+    @contextmanager
+    def from_app(
+        cls, app: "FastAPI", base_url: str = "http://testserver"
+    ) -> Iterator[Self]:
+        from fastapi.testclient import TestClient
+
+        with TestClient(app, base_url=base_url) as client:
+            yield cls(client)
+
+    @staticmethod
+    def _filter_and_encode_params(
+        params: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if params is None:
+            return None
+        return {
+            param: jsonable_encoder(value)
+            for param, value in params.items()
+            if value is not BIRTHDAY_APP_CLIENT_NOT_REQUIRED
+        } or None
+
+    def _route_handler(
+        self,
+        *,
+        path: str,
+        method: HTTPMethod,
+        default_status: HTTPStatus,
+        models: Mapping[HTTPStatus, Any],
+        path_params: Mapping[str, Any] | None = None,
+        query_params: Mapping[str, Any] | None = None,
+        header_params: Mapping[str, Any] | None = None,
+        cookie_params: Mapping[str, Any] | None = None,
+        body_params: Mapping[str, Any] | None = None,
+        is_body_embedded: bool = False,
+        is_streaming_json: bool = False,
+        raise_if_not_default_status: bool = False,
+        client_exts: BirthdayAppClientExtensions | None = None,
+    ) -> BirthdayAppClientResult[HTTPStatus, Any]:
+        if not client_exts:
+            client_exts = {}
+
+        url = path
+        for param, value in (self._filter_and_encode_params(path_params) or {}).items():
+            value_str = (
+                f"{value:0.20f}".rstrip("0").rstrip(".")
+                if isinstance(value, float)
+                else str(value)
+            )
+            url = url.replace(f"{{{param}}}", value_str)
+
+        body = self._filter_and_encode_params(body_params)
+        if body and not is_body_embedded:
+            body = next(iter(body.values()))
+
+        cookies = self._filter_and_encode_params(cookie_params)
+        if cookies:
+            warn(
+                "Setting cookie parameters directly on an endpoint function is "
+                "experimental. (This is the cause for the DeprecationWarning by httpx "
+                "below.)",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        timeout = client_exts.get("timeout")
+        # Scuffed isinstance() check because we don't want to import
+        # starlette.testclient.Testclient for users that don't need it.
+        if (
+            self.client.__class__.__name__ == "TestClient"
+            and self.client.__class__.__module__ == "starlette.testclient"
+            and timeout
+        ):
+            warn(
+                "Starlette's TestClient (which you probably use via "
+                f"{self.__class__.__name__}.from_app()) does not support timeouts. See "
+                "https://github.com/Kludex/starlette/issues/1108 for more information.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            timeout = USE_CLIENT_DEFAULT  # Hide the warning generated by Starlette.
+
+        response = self.client.request(
+            method.name,
+            url,
+            params=self._filter_and_encode_params(query_params),
+            headers=self._filter_and_encode_params(header_params),
+            cookies=cookies,
+            json=body,
+            timeout=timeout or USE_CLIENT_DEFAULT,
+        )
+        status = HTTPStatus(response.status_code)
+
+        model = models[status]
+        if is_streaming_json and status == default_status:
+
+            def data_iter() -> Iterator[Any]:
+                for part in response.iter_lines():
+                    yield TypeAdapter(model).validate_json(part)
+
+            data = data_iter()
+        else:
+            data = TypeAdapter(model).validate_json(response.text)
+
+        result = BirthdayAppClientResult(
+            status=status,
+            data=data,
+            model=model,
+            response=response,
+        )
+        if status != default_status and raise_if_not_default_status:
+            raise BirthdayAppClientNotDefaultStatusError(
+                default_status=default_status, result=result
+            )
+        return result
+
+    @overload
+    def register_birthday(
+        self,
+        data: BirthdayData,
+        *,
+        raise_if_not_default_status: Literal[True],
+        client_exts: BirthdayAppClientExtensions | None = None,
+    ) -> BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]: ...
+    @overload
+    def register_birthday(
+        self,
+        data: BirthdayData,
+        *,
+        raise_if_not_default_status: Literal[False] = False,
+        client_exts: BirthdayAppClientExtensions | None = None,
+    ) -> (
+        BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]
+        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_ENTITY], BirthdayAppClientHTTPValidationError]
+    ): ...
+    def register_birthday(
+        self,
+        data: BirthdayData,
+        *,
+        raise_if_not_default_status: bool = False,
+        client_exts: BirthdayAppClientExtensions | None = None,
+    ) -> BirthdayAppClientResult[HTTPStatus, Any]:
+        return self._route_handler(  # type: ignore
+            path="/birthday",
+            method=HTTPMethod.POST,
+            default_status=HTTPStatus.CREATED,
+            models={
+                HTTPStatus.CREATED: bool,
+                HTTPStatus.UNPROCESSABLE_ENTITY: BirthdayAppClientHTTPValidationError,
+            },
+            body_params={
+                "data": data,
+            },
+            raise_if_not_default_status=raise_if_not_default_status,
+            client_exts=client_exts,
+        )
+
+    @overload
+    def get_birthday(
+        self,
+        name: str,
+        *,
+        raise_if_not_default_status: Literal[True],
+        client_exts: BirthdayAppClientExtensions | None = None,
+    ) -> BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]: ...
+    @overload
+    def get_birthday(
+        self,
+        name: str,
+        *,
+        raise_if_not_default_status: Literal[False] = False,
+        client_exts: BirthdayAppClientExtensions | None = None,
+    ) -> (
+        BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]
+        | BirthdayAppClientResult[Literal[HTTPStatus.NOT_FOUND], GetBirthdayError]
+        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_ENTITY], BirthdayAppClientHTTPValidationError]
+    ): ...
+    def get_birthday(
+        self,
+        name: str,
+        *,
+        raise_if_not_default_status: bool = False,
+        client_exts: BirthdayAppClientExtensions | None = None,
+    ) -> BirthdayAppClientResult[HTTPStatus, Any]:
+        return self._route_handler(  # type: ignore
+            path="/birthday/{name}",
+            method=HTTPMethod.GET,
+            default_status=HTTPStatus.OK,
+            models={
+                HTTPStatus.OK: BirthdayData,
+                HTTPStatus.NOT_FOUND: GetBirthdayError,
+                HTTPStatus.UNPROCESSABLE_ENTITY: BirthdayAppClientHTTPValidationError,
+            },
+            path_params={
+                "name": name,
+            },
+            raise_if_not_default_status=raise_if_not_default_status,
+            client_exts=client_exts,
+        )
