@@ -91,7 +91,7 @@ class BirthdayAppClient:
     @classmethod
     @contextmanager
     def from_app(
-        cls, app: "FastAPI", base_url: str = "http://testserver"
+        cls, app: FastAPI, base_url: str = "http://testserver"
     ) -> Iterator[Self]:
         from fastapi.testclient import TestClient
 
@@ -221,7 +221,7 @@ class BirthdayAppClient:
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]
-        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_ENTITY], BirthdayAppClientHTTPValidationError]
+        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
     ): ...
     def register_birthday(
         self,
@@ -236,7 +236,7 @@ class BirthdayAppClient:
             default_status=HTTPStatus.CREATED,
             models={
                 HTTPStatus.CREATED: bool,
-                HTTPStatus.UNPROCESSABLE_ENTITY: BirthdayAppClientHTTPValidationError,
+                HTTPStatus.UNPROCESSABLE_CONTENT: BirthdayAppClientHTTPValidationError,
             },
             body_params={
                 "data": data,
@@ -263,7 +263,7 @@ class BirthdayAppClient:
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]
         | BirthdayAppClientResult[Literal[HTTPStatus.NOT_FOUND], GetBirthdayError]
-        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_ENTITY], BirthdayAppClientHTTPValidationError]
+        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
     ): ...
     def get_birthday(
         self,
@@ -279,7 +279,7 @@ class BirthdayAppClient:
             models={
                 HTTPStatus.OK: BirthdayData,
                 HTTPStatus.NOT_FOUND: GetBirthdayError,
-                HTTPStatus.UNPROCESSABLE_ENTITY: BirthdayAppClientHTTPValidationError,
+                HTTPStatus.UNPROCESSABLE_CONTENT: BirthdayAppClientHTTPValidationError,
             },
             path_params={
                 "name": name,
