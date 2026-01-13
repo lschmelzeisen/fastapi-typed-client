@@ -172,7 +172,7 @@ def _client_tester_helper(
     shared_file = tmp_path / "shared.py"
     client_file = tmp_path / "client.py"
     client_test_file = tmp_path / "client_test.py"
-    title = "Client"
+    title = "TestClient"
 
     shared_file.write_text(getsource(shared), encoding="utf-8")
 
@@ -221,7 +221,7 @@ def _client_tester_helper(
         assert_format_of_generated_code=assert_format_of_generated_code,
     )
 
-    client_class = import_module(client_file.stem, "tests").Client
+    client_class = getattr(import_module(client_file.stem, "tests"), title)
     client_test = import_module(client_test_file.stem, "tests").client_test
     return client_class, client_test
 
