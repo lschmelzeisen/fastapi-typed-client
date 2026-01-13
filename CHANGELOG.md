@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Update minimum supported Python version to 3.14. Older Python versions might work, but are not tested against.
 - Update minimum required version of supported dependencies (`fastapi>=0.128.0`, `pydantic>=2.12.5`, `typer>=0.21.1`). Older dependency versions might work, but are not tested against.
+- Stop quoting type annotations in generated clients (possible thanks to Python 3.14's [deferred evaluation of annotations](https://docs.python.org/3/whatsnew/3.14.html#pep-649-pep-749-deferred-evaluation-of-annotations)).
 - Use `HTTPStatus.UNPROCESSABLE_CONTENT` instead of `HTTPStatus.UNPROCESSABLE_ENTITY` (constant renamed with Python 3.13) in generated clients.
 
 ## [0.1.0](https://github.com/lschmelzeisen/fastapi-typed-client/releases/tag/v0.1.0) - 2025-10-18

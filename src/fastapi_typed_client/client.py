@@ -88,7 +88,7 @@ class FastAPIClientBase:
     @classmethod
     @contextmanager
     def from_app(
-        cls, app: "FastAPI", base_url: str = "http://testserver"
+        cls, app: FastAPI, base_url: str = "http://testserver"
     ) -> Iterator[Self]:
         from fastapi.testclient import TestClient
 
@@ -209,7 +209,7 @@ class FastAPIClientAsyncBase:
     @classmethod
     @asynccontextmanager
     async def from_app(
-        cls, app: "FastAPI", base_url: str = "http://testserver"
+        cls, app: FastAPI, base_url: str = "http://testserver"
     ) -> AsyncIterator[Self]:
         async with AsyncClient(
             transport=ASGITransport(app), base_url=base_url

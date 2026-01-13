@@ -27,7 +27,7 @@ class Import(NamedTuple):
     def ident(self) -> str:
         return self.alias or self.name or self.module.partition(".")[0]
 
-    def is_same(self, other: "Import") -> bool:
+    def is_same(self, other: Import) -> bool:
         return self.module == other.module and self.name == other.name
 
     def with_alias(self, alias: str | None) -> Self:
