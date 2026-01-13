@@ -202,7 +202,7 @@ def _parse_responses(
     if has_params:
         result.append(
             RouteResponse(
-                HTTPStatus.UNPROCESSABLE_ENTITY, FastAPIClientHTTPValidationError
+                HTTPStatus.UNPROCESSABLE_CONTENT, FastAPIClientHTTPValidationError
             )
         )
 

@@ -65,7 +65,7 @@ def test_types(app: FastAPI, client_tester: ClientTester) -> None:
             FastAPIClientResult[Literal[HTTPStatus.OK], str]
             | FastAPIClientResult[Literal[HTTPStatus.CREATED], int]
             | FastAPIClientResult[
-                Literal[HTTPStatus.UNPROCESSABLE_ENTITY],
+                Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
                 FastAPIClientHTTPValidationError,
             ],
         )
@@ -80,7 +80,7 @@ def test_types(app: FastAPI, client_tester: ClientTester) -> None:
             FastAPIClientResult[Literal[HTTPStatus.OK], str]
             | FastAPIClientResult[Literal[HTTPStatus.CREATED], int]
             | FastAPIClientResult[
-                Literal[HTTPStatus.UNPROCESSABLE_ENTITY],
+                Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
                 FastAPIClientHTTPValidationError,
             ],
         )
@@ -115,7 +115,7 @@ async def test_types_async(
             FastAPIClientResult[Literal[HTTPStatus.OK], str]
             | FastAPIClientResult[Literal[HTTPStatus.CREATED], int]
             | FastAPIClientResult[
-                Literal[HTTPStatus.UNPROCESSABLE_ENTITY],
+                Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
                 FastAPIClientHTTPValidationError,
             ],
         )
@@ -130,7 +130,7 @@ async def test_types_async(
             FastAPIClientResult[Literal[HTTPStatus.OK], str]
             | FastAPIClientResult[Literal[HTTPStatus.CREATED], int]
             | FastAPIClientResult[
-                Literal[HTTPStatus.UNPROCESSABLE_ENTITY],
+                Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
                 FastAPIClientHTTPValidationError,
             ],
         )
@@ -238,7 +238,7 @@ def test_raise_if_not_default_status_default(
             FastAPIClientResult[Literal[HTTPStatus.OK], str]
             | FastAPIClientResult[Literal[HTTPStatus.CREATED], int]
             | FastAPIClientResult[
-                Literal[HTTPStatus.UNPROCESSABLE_ENTITY],
+                Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
                 FastAPIClientHTTPValidationError,
             ],
         )
@@ -275,7 +275,7 @@ async def test_raise_if_not_default_status_default_async(
             FastAPIClientResult[Literal[HTTPStatus.OK], str]
             | FastAPIClientResult[Literal[HTTPStatus.CREATED], int]
             | FastAPIClientResult[
-                Literal[HTTPStatus.UNPROCESSABLE_ENTITY],
+                Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
                 FastAPIClientHTTPValidationError,
             ],
         )
@@ -310,7 +310,7 @@ def test_with_diff_default_status(
             FastAPIClientResult[Literal[HTTPStatus.ACCEPTED], str]
             | FastAPIClientResult[Literal[HTTPStatus.CREATED], int]
             | FastAPIClientResult[
-                Literal[HTTPStatus.UNPROCESSABLE_ENTITY],
+                Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
                 FastAPIClientHTTPValidationError,
             ],
         )
@@ -359,7 +359,7 @@ async def test_with_diff_default_status_async(
             FastAPIClientResult[Literal[HTTPStatus.ACCEPTED], str]
             | FastAPIClientResult[Literal[HTTPStatus.CREATED], int]
             | FastAPIClientResult[
-                Literal[HTTPStatus.UNPROCESSABLE_ENTITY],
+                Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
                 FastAPIClientHTTPValidationError,
             ],
         )

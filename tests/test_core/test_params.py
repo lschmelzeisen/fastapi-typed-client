@@ -442,7 +442,7 @@ def test_validation_error(
         )
 
         result = client.value_gt_0(-1)
-        assert result.status == HTTPStatus.UNPROCESSABLE_ENTITY
+        assert result.status == HTTPStatus.UNPROCESSABLE_CONTENT
         assert result.data == FastAPIClientHTTPValidationError(
             detail=[
                 FastAPIClientValidationError(
@@ -475,7 +475,7 @@ async def test_validation_error_async(
         )
 
         result = await client.value_gt_0(-1)
-        assert result.status == HTTPStatus.UNPROCESSABLE_ENTITY
+        assert result.status == HTTPStatus.UNPROCESSABLE_CONTENT
         assert result.data == FastAPIClientHTTPValidationError(
             detail=[
                 FastAPIClientValidationError(
