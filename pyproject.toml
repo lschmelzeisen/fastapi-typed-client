@@ -12,7 +12,7 @@ description = "Generate a fully-typed client for your FastAPI app with the Pydan
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 keywords = ["fastapi", "client", "testing", "typed", "httpx", "pydantic", "api-client"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -29,8 +29,6 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Internet",
     "Topic :: Internet :: WWW/HTTP",
@@ -75,7 +73,7 @@ testpaths = ["tests"]
 xfail_strict = true
 
 [tool.pyrefly]
-python-version = "3.12"
+python-version = "3.14"
 infer-with-first-use = false
 search-path = ["src", "tests", "examples"]
 

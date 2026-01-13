@@ -1,7 +1,7 @@
 # fastapi-typed-client
 
 [![PyPI](https://img.shields.io/pypi/v/fastapi-typed-client)](https://pypi.org/project/fastapi-typed-client/)
-[![Python 3.12-3.14](https://img.shields.io/pypi/pyversions/fastapi-typed-client)](https://pypi.org/project/fastapi-typed-client/)
+[![Python 3.14](https://img.shields.io/pypi/pyversions/fastapi-typed-client)](https://pypi.org/project/fastapi-typed-client/)
 [![License](https://img.shields.io/pypi/l/fastapi-typed-client)](./LICENSE)
 
 Generate a fully-typed client for your [FastAPI](https://fastapi.tiangolo.com/) app with the Pydantic models from your code.
@@ -50,7 +50,7 @@ Generates a client for your FastAPI app that:
 - Support for **streams of JSON objects** (experimental)
 - Only depends on [Pydantic](https://pydantic.dev/), [HTTPX](https://www.python-httpx.org/), [`fastapi.encoders`](https://fastapi.tiangolo.com/reference/encoders/), and any Pydantic models that your app defines at runtime
 - Generated code is **human-readable**, has **diff-friendly formatting**, **controllable import styles**, and is **designed to be checked into version control**
-- Supports Python 3.12-3.14
+- Supports Python 3.14
 
 ## Introduction
 
