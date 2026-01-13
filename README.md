@@ -50,7 +50,7 @@ Generates a client for your FastAPI app that:
 - Support for **streams of JSON objects** (experimental)
 - Only depends on [Pydantic](https://pydantic.dev/), [HTTPX](https://www.python-httpx.org/), [`fastapi.encoders`](https://fastapi.tiangolo.com/reference/encoders/), and any Pydantic models that your app defines at runtime
 - Generated code is **human-readable**, has **diff-friendly formatting**, **controllable import styles**, and is **designed to be checked into version control**
-- Supports Python 3.14
+- Supports Python 3.14 and FastAPI >= 0.128.0 (open an [issue](https://github.com/lschmelzeisen/fastapi-typed-client/issues) if you need support for older versions)
 
 ## Introduction
 
