@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "fastapi-typed-client"
-version = "0.1.0"
+version = "0.2.0"
 authors = [
     { name = "Lukas Schmelzeisen", email = "me@lschmelzeisen.com" }
 ]
