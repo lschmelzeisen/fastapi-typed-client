@@ -24,7 +24,6 @@ _IMPORTS = [
     Mapping,
     NamedTuple,
     Response,
-    Self,
     Timeout,
     TypeAdapter,
     TypedDict,

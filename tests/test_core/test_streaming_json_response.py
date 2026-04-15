@@ -13,6 +13,8 @@ from ..shared import TEXT_AND_NUM_DATA, TextAndNum
 # This class is not something that is necessarily suited for production use cases.
 # Instead, it is the minimal code to the streaming JSON functionality of this package.
 class JSONStreamingResponse(StreamingResponse, JSONResponse):
+    media_type = "application/json"
+
     def __init__(self, content: AsyncIterable[Any]) -> None:
         async def content_iter() -> AsyncIterable[bytes]:
             async for item in content:

@@ -142,7 +142,7 @@ def _parse_params(route: APIRoute) -> tuple[Sequence[RouteParam], bool]:
                     alias=param.field_info.alias,
                     kind=param_kind,
                     type_=param.field_info.annotation or type(Any),
-                    required=param.required,
+                    required=param.field_info.is_required(),
                 )
             )
 
