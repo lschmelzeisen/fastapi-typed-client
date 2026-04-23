@@ -52,7 +52,12 @@ def test_route_with_multiple_methods() -> None:
 
 
 @pytest.mark.xfail(
-    raises=RuntimeError, reason="Routes with duplicate parameters are not supported yet"
+    raises=RuntimeError,
+    reason=(
+        "Same Python parameter name declared in different kinds (Query vs Header) "
+        "collides in the generated client signature; could in principle be "
+        "supported by sending the same value to both locations, but not yet."
+    ),
 )
 def test_route_with_single_duplicate_parameter_names() -> None:
     app = FastAPI()
@@ -68,7 +73,12 @@ def test_route_with_single_duplicate_parameter_names() -> None:
 
 
 @pytest.mark.xfail(
-    raises=RuntimeError, reason="Routes with duplicate parameters are not supported yet"
+    raises=RuntimeError,
+    reason=(
+        "Same Python parameter name declared in different kinds (Query vs Header) "
+        "collides in the generated client signature; could in principle be "
+        "supported by sending the same value to both locations, but not yet."
+    ),
 )
 def test_route_with_multiple_duplicate_parameter_names() -> None:
     app = FastAPI()

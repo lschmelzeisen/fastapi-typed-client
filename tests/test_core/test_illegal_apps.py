@@ -1,5 +1,7 @@
+from typing import Annotated
+
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, Query
 from fastapi.routing import APIRoute
 
 from fastapi_typed_client import generate_fastapi_typed_client
@@ -58,6 +60,46 @@ def test_route_with_multiple_disallowed_param_name() -> None:
     @app.get("/")
     def endpoint(client_exts: str, raise_if_not_default_status: bool) -> None:
         pass
+
+    with pytest.raises(RuntimeError):
+        generate_fastapi_typed_client(app)
+
+
+def test_shared_param_with_incompatible_types() -> None:
+    app = FastAPI()
+
+    def dep_int(foo: Annotated[int, Query()]) -> int:
+        return foo
+
+    def dep_str(foo: Annotated[str, Query()]) -> str:
+        return foo
+
+    @app.get("/")
+    def endpoint(
+        a: Annotated[int, Depends(dep_int)],
+        b: Annotated[str, Depends(dep_str)],
+    ) -> str:
+        return f"{a}-{b}"
+
+    with pytest.raises(RuntimeError):
+        generate_fastapi_typed_client(app)
+
+
+def test_shared_param_with_different_aliases() -> None:
+    app = FastAPI()
+
+    def dep_a(foo: Annotated[str, Header(alias="X-A")]) -> str:
+        return foo
+
+    def dep_b(foo: Annotated[str, Header(alias="X-B")]) -> str:
+        return foo
+
+    @app.get("/")
+    def endpoint(
+        a: Annotated[str, Depends(dep_a)],
+        b: Annotated[str, Depends(dep_b)],
+    ) -> str:
+        return f"{a}-{b}"
 
     with pytest.raises(RuntimeError):
         generate_fastapi_typed_client(app)

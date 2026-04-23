@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),  and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased](https://github.com/lschmelzeisen/fastapi-typed-client/compare/v0.3.0...HEAD)
+
+### Fixed
+
+- Stop rejecting routes with shared sub-dependency params. Parameters declared by multiple (sub-)dependencies of the same route (e.g. two `Depends(...)` both taking `item_id: Annotated[UUID7, Path()]`) are now collapsed into a single client parameter instead of raising a false-positive `parameter ... whose name is not unique` error. Genuine conflicts — same name with different kinds (e.g. Query vs Header), same kind with different aliases, or same kind+name with incompatible types — still fail generation, now with a clearer message distinguishing "not unique" from "declared with incompatible definitions".
+
 ## [0.3.0](https://github.com/lschmelzeisen/fastapi-typed-client/releases/tag/v0.3.0) - 2026-04-15
 
 ### Changed

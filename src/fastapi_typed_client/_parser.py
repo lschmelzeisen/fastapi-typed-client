@@ -127,28 +127,33 @@ def _parse_params(route: APIRoute) -> tuple[Sequence[RouteParam], bool]:
     seen_names = set[str]()
     disallowed_names = set[str]()
     duplicate_names = set[str]()
+    incompatible_names = set[str]()
 
     for param_kind, params in params_map.items():
-        for param in params:
-            if param.name in _DISALLOWED_PARAM_NAMES:
-                disallowed_names.add(param.name)
-            if param.name in seen_names:
-                duplicate_names.add(param.name)
-            seen_names.add(param.name)
-
+        for group in _group_fields_by_alias(params):
+            primary = group[0]
+            if primary.name in _DISALLOWED_PARAM_NAMES:
+                disallowed_names.add(primary.name)
+            if not _group_is_compatible(group):
+                incompatible_names.add(primary.name)
+                continue
+            if primary.name in seen_names:
+                duplicate_names.add(primary.name)
+            seen_names.add(primary.name)
             result.append(
                 RouteParam(
-                    name=param.name,
-                    alias=param.field_info.alias,
+                    name=primary.name,
+                    alias=primary.field_info.alias,
                     kind=param_kind,
-                    type_=param.field_info.annotation or type(Any),
-                    required=param.field_info.is_required(),
+                    type_=primary.field_info.annotation or type(Any),
+                    required=any(p.field_info.is_required() for p in group),
                 )
             )
 
     for names, error in (
         (disallowed_names, "not allowed"),
         (duplicate_names, "not unique"),
+        (incompatible_names, "declared with incompatible definitions"),
     ):
         if len(names) == 1:
             raise RuntimeError(
@@ -167,6 +172,30 @@ def _parse_params(route: APIRoute) -> tuple[Sequence[RouteParam], bool]:
     is_body_embedded = route._embed_body_fields  # noqa: SLF001
 
     return result, is_body_embedded
+
+
+def _group_fields_by_alias(
+    fields: Sequence[ModelField],
+) -> Iterable[list[ModelField]]:
+    # Two (sub-)dependencies of the same route may each declare the same parameter —
+    # e.g. two `Depends` both taking `item_id: Annotated[int, Path()]`. These represent
+    # one HTTP parameter, so we collapse them into a single group.
+    grouped: dict[str, list[ModelField]] = {}
+    for field in fields:
+        grouped.setdefault(field.alias, []).append(field)
+    return grouped.values()
+
+
+def _group_is_compatible(group: Sequence[ModelField]) -> bool:
+    # Contributions to the same parameter must be compatible: the client exposes
+    # a single Python parameter with a single type, so Python name and annotation
+    # must agree. Aliases already agree by construction of the group.
+    primary = group[0]
+    return not any(
+        other.name != primary.name
+        or other.field_info.annotation != primary.field_info.annotation
+        for other in group[1:]
+    )
 
 
 def _parse_responses(
