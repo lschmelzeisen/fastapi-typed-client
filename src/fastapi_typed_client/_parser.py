@@ -11,6 +11,7 @@ from http import HTTPMethod, HTTPStatus
 from typing import Any, NamedTuple, get_args, get_origin
 
 from fastapi._compat import ModelField
+from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import (
     _get_flat_fields_from_params,
     get_flat_dependant,
@@ -18,7 +19,19 @@ from fastapi.dependencies.utils import (
 )
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute, BaseRoute
+from fastapi.security import (
+    APIKeyCookie,
+    APIKeyHeader,
+    APIKeyQuery,
+    HTTPBasic,
+    HTTPBearer,
+    OAuth2AuthorizationCodeBearer,
+    OAuth2PasswordBearer,
+    OpenIdConnect,
+)
+from fastapi.security.base import SecurityBase
 
+from ._utils import to_snake_case
 from .client import FastAPIClientHTTPValidationError
 
 _DISALLOWED_PARAM_NAMES = {
@@ -36,6 +49,20 @@ class RouteParamKind(Enum):
     HEADER = auto()
     COOKIE = auto()
     BODY = auto()
+    SECURITY = auto()
+
+
+class RouteSecurityKind(Enum):
+    HTTP_BEARER = auto()
+    HTTP_BASIC = auto()
+    API_KEY_HEADER = auto()
+    API_KEY_COOKIE = auto()
+    API_KEY_QUERY = auto()
+
+
+class RouteSecurity(NamedTuple):
+    kind: RouteSecurityKind
+    target_name: str
 
 
 class RouteParam(NamedTuple):
@@ -44,6 +71,7 @@ class RouteParam(NamedTuple):
     kind: RouteParamKind
     type_: Any
     required: bool = False
+    security: RouteSecurity | None = None
 
 
 class RouteResponse(NamedTuple):
@@ -112,43 +140,40 @@ def _parse_route(route: APIRoute) -> Route:
 
 
 def _parse_params(route: APIRoute) -> tuple[Sequence[RouteParam], bool]:
-    result = list[RouteParam]()
-
-    dependant = get_flat_dependant(route.dependant, skip_repeats=True)
-    params_map: dict[RouteParamKind, list[ModelField]] = {
-        # Couldn't find a better way to get flat fields.
-        RouteParamKind.PATH: _get_flat_fields_from_params(dependant.path_params),
-        RouteParamKind.QUERY: _get_flat_fields_from_params(dependant.query_params),
-        RouteParamKind.HEADER: _get_flat_fields_from_params(dependant.header_params),
-        RouteParamKind.COOKIE: _get_flat_fields_from_params(dependant.cookie_params),
-        RouteParamKind.BODY: dependant.body_params,
-    }
-
+    incompatible_names = set[str]()
     seen_names = set[str]()
     disallowed_names = set[str]()
     duplicate_names = set[str]()
-    incompatible_names = set[str]()
 
-    for param_kind, params in params_map.items():
-        for group in _group_fields_by_alias(params):
-            primary = group[0]
-            if primary.name in _DISALLOWED_PARAM_NAMES:
-                disallowed_names.add(primary.name)
-            if not _group_is_compatible(group):
-                incompatible_names.add(primary.name)
-                continue
-            if primary.name in seen_names:
-                duplicate_names.add(primary.name)
-            seen_names.add(primary.name)
-            result.append(
-                RouteParam(
-                    name=primary.name,
-                    alias=primary.field_info.alias,
-                    kind=param_kind,
-                    type_=primary.field_info.annotation or type(Any),
-                    required=any(p.field_info.is_required() for p in group),
-                )
-            )
+    dependant = get_flat_dependant(route.dependant, skip_repeats=True)
+
+    fields_params_map: dict[RouteParamKind, list[ModelField]] = {
+        RouteParamKind.PATH: dependant.path_params,
+        RouteParamKind.QUERY: dependant.query_params,
+        RouteParamKind.HEADER: dependant.header_params,
+        RouteParamKind.COOKIE: dependant.cookie_params,
+    }
+    fields_params_map = {
+        kind: _get_flat_fields_from_params(fields)
+        for kind, fields in fields_params_map.items()
+    }
+    fields_params_map[RouteParamKind.BODY] = dependant.body_params
+
+    route_params_map: dict[RouteParamKind, Sequence[RouteParam]] = {
+        kind: _fields_to_route_params(kind, fields, incompatible_names)
+        for kind, fields in fields_params_map.items()
+    }
+    route_params_map[RouteParamKind.SECURITY] = _parse_security_params(route, dependant)
+
+    result = list[RouteParam]()
+    for params in route_params_map.values():
+        for param in params:
+            if param.name in _DISALLOWED_PARAM_NAMES:
+                disallowed_names.add(param.name)
+            if param.name in seen_names:
+                duplicate_names.add(param.name)
+            seen_names.add(param.name)
+            result.append(param)
 
     for names, error in (
         (disallowed_names, "not allowed"),
@@ -174,6 +199,29 @@ def _parse_params(route: APIRoute) -> tuple[Sequence[RouteParam], bool]:
     return result, is_body_embedded
 
 
+def _fields_to_route_params(
+    kind: RouteParamKind,
+    fields: Sequence[ModelField],
+    incompatible_names: set[str],
+) -> Sequence[RouteParam]:
+    result = list[RouteParam]()
+    for group in _group_fields_by_alias(fields):
+        primary = group[0]
+        if not _is_field_group_compatible(group):
+            incompatible_names.add(primary.name)
+            continue
+        result.append(
+            RouteParam(
+                name=primary.name,
+                alias=primary.field_info.alias,
+                kind=kind,
+                type_=primary.field_info.annotation or type(Any),
+                required=any(p.field_info.is_required() for p in group),
+            )
+        )
+    return result
+
+
 def _group_fields_by_alias(
     fields: Sequence[ModelField],
 ) -> Iterable[list[ModelField]]:
@@ -186,7 +234,7 @@ def _group_fields_by_alias(
     return grouped.values()
 
 
-def _group_is_compatible(group: Sequence[ModelField]) -> bool:
+def _is_field_group_compatible(group: Sequence[ModelField]) -> bool:
     # Contributions to the same parameter must be compatible: the client exposes
     # a single Python parameter with a single type, so Python name and annotation
     # must agree. Aliases already agree by construction of the group.
@@ -195,6 +243,67 @@ def _group_is_compatible(group: Sequence[ModelField]) -> bool:
         other.name != primary.name
         or other.field_info.annotation != primary.field_info.annotation
         for other in group[1:]
+    )
+
+
+def _parse_security_params(
+    route: APIRoute, dependant: Dependant
+) -> Sequence[RouteParam]:
+    result = list[RouteParam]()
+    seen_schemes = set[SecurityBase]()
+    for dep in dependant.dependencies:
+        if not dep._is_security_scheme:  # noqa: SLF001
+            continue
+        scheme = dep._security_scheme  # noqa: SLF001
+        if scheme in seen_schemes:
+            continue
+        seen_schemes.add(scheme)
+        result.append(_route_param_for_security_scheme(route, scheme, dep.name))
+    return result
+
+
+def _route_param_for_security_scheme(
+    route: APIRoute, scheme: SecurityBase, param_name: str | None
+) -> RouteParam:
+    type_: type = str
+    security_kind: RouteSecurityKind
+    target_name: str
+
+    if isinstance(
+        scheme,
+        HTTPBearer
+        | OAuth2PasswordBearer
+        | OAuth2AuthorizationCodeBearer
+        | OpenIdConnect,
+    ):
+        security_kind = RouteSecurityKind.HTTP_BEARER
+        target_name = "Authorization"
+    elif isinstance(scheme, HTTPBasic):
+        type_ = tuple[str, str]
+        security_kind = RouteSecurityKind.HTTP_BASIC
+        target_name = "Authorization"
+    elif isinstance(scheme, APIKeyHeader):
+        security_kind = RouteSecurityKind.API_KEY_HEADER
+        target_name = scheme.model.name
+    elif isinstance(scheme, APIKeyCookie):
+        security_kind = RouteSecurityKind.API_KEY_COOKIE
+        target_name = scheme.model.name
+    elif isinstance(scheme, APIKeyQuery):
+        security_kind = RouteSecurityKind.API_KEY_QUERY
+        target_name = scheme.model.name
+    else:
+        raise RuntimeError(
+            f"Route {route.name} uses unsupported security scheme "
+            f"`{type(scheme).__name__}`."
+        )
+
+    return RouteParam(
+        name=param_name or to_snake_case(scheme.scheme_name),
+        alias=None,
+        kind=RouteParamKind.SECURITY,
+        type_=type_,
+        required=getattr(scheme, "auto_error", True),
+        security=RouteSecurity(kind=security_kind, target_name=target_name),
     )
 
 

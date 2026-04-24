@@ -47,6 +47,7 @@ Generates a client for your FastAPI app that:
 - Uses the **types and Pydantic models defined in your app code**
 - Can be either **sync or async** (via the `--async` CLI option)
 - Support for **path**, **query**, **header**, **body parameters** (plus experimental support for **cookie parameters**)
+- Support for **security schemes** (`HTTPBearer`, `HTTPBasic`, `APIKeyHeader`, `APIKeyCookie`, `APIKeyQuery`, `OAuth2PasswordBearer`, `OAuth2AuthorizationCodeBearer`, `OpenIdConnect`)
 - Support for **streams of JSON objects** (experimental)
 - Only depends on [Pydantic](https://pydantic.dev/), [HTTPX](https://www.python-httpx.org/), [`fastapi.encoders`](https://fastapi.tiangolo.com/reference/encoders/), and any Pydantic models that your app defines at runtime
 - Generated code is **human-readable**, has **diff-friendly formatting**, **controllable import styles**, and is **designed to be checked into version control**
@@ -344,11 +345,12 @@ TypedDict for passing additional options via the `client_exts` parameter to each
 The following FastAPI features are not yet supported:
 
 - [WebSockets](https://fastapi.tiangolo.com/advanced/websockets/) endpoints
-- Endpoints with [form data](https://fastapi.tiangolo.com/tutorial/request-forms/) or [file upload](https://fastapi.tiangolo.com/tutorial/request-files/) parameters
+- Endpoints with [form data](https://fastapi.tiangolo.com/tutorial/request-forms/) or [file upload](https://fastapi.tiangolo.com/tutorial/request-files/) parameters (including the `OAuth2PasswordRequestForm` security helper)
 - Endpoints that can be reached via more than one HTTP method
 - Endpoints with duplicate parameter names (e.g., a query and a header parameter with the same name)
 - Endpoints using any of `response_model_include`, `response_model_exclude`, `response_model_by_alias`, `response_model_exclude_unset`, `response_model_exclude_defaults`, or `response_model_exclude_none`
 - Endpoints with `FileResponse`, `HTMLResponse`, `PlainTextResponse`, `RedirectResponse` or a custom response class
+- The `HTTPDigest` security scheme (challenge-response flow, not reducible to a static header)
 
 ## Development
 

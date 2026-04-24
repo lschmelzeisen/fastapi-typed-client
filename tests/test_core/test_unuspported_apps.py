@@ -2,6 +2,10 @@ from typing import Annotated
 
 import pytest
 from fastapi import Depends, FastAPI, Header, Query
+from fastapi.openapi.models import SecurityBase as SecurityBaseModel
+from fastapi.openapi.models import SecuritySchemeType
+from fastapi.security import HTTPDigest, OAuth2
+from fastapi.security.base import SecurityBase
 
 from fastapi_typed_client import generate_fastapi_typed_client
 
@@ -88,6 +92,62 @@ def test_route_with_multiple_duplicate_parameter_names() -> None:
 
     @app.get("/", dependencies=[Depends(dependency)])
     def endpoint(foo: Annotated[str, Header()], bar: Annotated[str, Header()]) -> None:
+        pass
+
+    generate_fastapi_typed_client(app)
+
+
+@pytest.mark.xfail(
+    raises=RuntimeError,
+    reason=(
+        "HTTPDigest is a challenge-response scheme and can not be reduced to a "
+        "static header; not supported yet."
+    ),
+)
+def test_route_with_http_digest_security() -> None:
+    app = FastAPI()
+
+    @app.get("/", dependencies=[Depends(HTTPDigest())])
+    def endpoint() -> None:
+        pass
+
+    generate_fastapi_typed_client(app)
+
+
+@pytest.mark.xfail(
+    raises=RuntimeError,
+    reason=(
+        "The OAuth2 base class (with custom flows) is not supported yet; use one of "
+        "OAuth2PasswordBearer / OAuth2AuthorizationCodeBearer / OpenIdConnect."
+    ),
+)
+def test_route_with_oauth2_base_security() -> None:
+    app = FastAPI()
+
+    @app.get("/", dependencies=[Depends(OAuth2(flows={}))])
+    def endpoint() -> None:
+        pass
+
+    generate_fastapi_typed_client(app)
+
+
+@pytest.mark.xfail(
+    raises=RuntimeError,
+    reason="Custom SecurityBase subclasses are not supported yet.",
+)
+def test_route_with_custom_security_base() -> None:
+    class CustomAuth(SecurityBase):
+        def __init__(self) -> None:
+            self.scheme_name = "CustomAuth"
+            self.model = SecurityBaseModel(type=SecuritySchemeType.http)
+
+        def __call__(self) -> str:
+            return "ok"
+
+    app = FastAPI()
+
+    @app.get("/", dependencies=[Depends(CustomAuth())])
+    def endpoint() -> None:
         pass
 
     generate_fastapi_typed_client(app)

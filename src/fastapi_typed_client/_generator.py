@@ -24,6 +24,7 @@ from .client import (
     FastAPIClientHTTPValidationError,
     FastAPIClientNotDefaultStatusError,
     FastAPIClientResult,
+    FastAPIClientSecurityParam,
     FastAPIClientValidationError,
 )
 
@@ -34,6 +35,7 @@ class _Identifiers(NamedTuple):
     validation_error: str
     http_validation_error: str
     not_default_status_error: str
+    security_param: str
     not_required: str
     base_class: str
     client_class: str
@@ -45,6 +47,7 @@ class _Identifiers(NamedTuple):
             FastAPIClientValidationError.__name__: self.validation_error,
             FastAPIClientHTTPValidationError.__name__: self.http_validation_error,
             FastAPIClientNotDefaultStatusError.__name__: self.not_default_status_error,
+            FastAPIClientSecurityParam.__name__: self.security_param,
             "FASTAPI_CLIENT_NOT_REQUIRED": self.not_required,
             FastAPIClientBase.__name__: self.base_class,
             FastAPIClientAsyncBase.__name__: self.base_class,
@@ -89,6 +92,7 @@ class ClientCodeGenerator:
                 validation_error=FastAPIClientValidationError.__name__,
                 http_validation_error=FastAPIClientHTTPValidationError.__name__,
                 not_default_status_error=FastAPIClientNotDefaultStatusError.__name__,
+                security_param=FastAPIClientSecurityParam.__name__,
                 not_required="FASTAPI_CLIENT_NOT_REQUIRED",
                 base_class=self._base_class.__name__,
                 client_class=self._title,
@@ -99,6 +103,7 @@ class ClientCodeGenerator:
             validation_error=f"{self._title}ValidationError",
             http_validation_error=f"{self._title}HTTPValidationError",
             not_default_status_error=f"{self._title}NotDefaultStatusError",
+            security_param=f"{self._title}SecurityParam",
             not_required=(
                 to_constant_case(self._title).replace("FAST_API", "FASTAPI")
                 + "_NOT_REQUIRED"
@@ -133,6 +138,7 @@ class ClientCodeGenerator:
             f"    default_status={self._impr(HTTPStatus)}.{route.default_status.name},\n"
             + indent(self._get_models_dict_code(route.responses.values()))
             + indent(self._get_params_dicts_code(route.params))
+            + indent(self._get_security_params_code(route.params))
             + indent(self._get_optional_params_code(route))
             + "    raise_if_not_default_status=raise_if_not_default_status,\n"
             "    client_exts=client_exts,\n"
@@ -243,6 +249,8 @@ class ClientCodeGenerator:
     def _get_params_dicts_code(params: Sequence[RouteParam]) -> str:
         code = ""
         for param_kind in RouteParamKind:
+            if param_kind is RouteParamKind.SECURITY:
+                continue
             kind_params = [param for param in params if param.kind is param_kind]
             if not kind_params:
                 continue
@@ -250,6 +258,25 @@ class ClientCodeGenerator:
             for param in kind_params:
                 code += f"    {dq_str_repr(param.alias or param.name)}: {param.name},\n"
             code += "},\n"
+        return code
+
+    def _get_security_params_code(self, params: Sequence[RouteParam]) -> str:
+        security_params = [
+            param for param in params if param.kind is RouteParamKind.SECURITY
+        ]
+        if not security_params:
+            return ""
+        code = "security_params=(\n"
+        for param in security_params:
+            if param.security is None:
+                continue
+            code += (
+                f"    {self._idents.security_param}("
+                f"kind={dq_str_repr(param.security.kind.name.lower())}, "
+                f"name={dq_str_repr(param.security.target_name)}, "
+                f"value={param.name}),\n"
+            )
+        code += "),\n"
         return code
 
     @staticmethod
@@ -284,9 +311,14 @@ class _BoilerplateCodeGenerator:
             for route in routes
             for response in route.responses.values()
         )
+        has_security_params = any(
+            param.kind is RouteParamKind.SECURITY
+            for route in routes
+            for param in route.params
+        )
         if import_client_base:
             return self._generate_with_import_client_base(
-                has_not_required_params, has_validation_errors
+                has_not_required_params, has_validation_errors, has_security_params
             )
         return self._generate_without_import_client_base(has_validation_errors)
 
@@ -294,6 +326,7 @@ class _BoilerplateCodeGenerator:
         self,
         has_not_required_params: bool,
         has_validation_errors: bool,
+        has_security_params: bool,
     ) -> str:
         # Manually write imports here so that modules are imported from specific
         # submodule instead of top-level module.
@@ -302,6 +335,7 @@ class _BoilerplateCodeGenerator:
             self._idents.client_extensions,
             self._idents.result,
             self._idents.http_validation_error if has_validation_errors else None,
+            self._idents.security_param if has_security_params else None,
             self._idents.not_required if has_not_required_params else None,
         ]:
             if import_name:
@@ -359,6 +393,7 @@ class _BoilerplateCodeGenerator:
                 else None
             ),
             getsource(FastAPIClientNotDefaultStatusError),
+            getsource(FastAPIClientSecurityParam),
             "FASTAPI_CLIENT_NOT_REQUIRED: Any = ...\n",
             "# TEST_MARKER_AFTER_BOILERPLATE\n" if self._add_test_markers else None,
             base_class_source_with_test_markers(),

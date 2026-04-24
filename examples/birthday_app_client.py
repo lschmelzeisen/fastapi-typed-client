@@ -1,6 +1,8 @@
+from base64 import b64encode
 from collections.abc import (
     Iterator,
     Mapping,
+    MutableMapping,
     Sequence,
 )
 from contextlib import contextmanager
@@ -81,6 +83,18 @@ class BirthdayAppClientNotDefaultStatusError(Exception):
         self.result = result
 
 
+class BirthdayAppClientSecurityParam(NamedTuple):
+    kind: Literal[
+        "http_bearer",
+        "http_basic",
+        "api_key_header",
+        "api_key_cookie",
+        "api_key_query",
+    ]
+    name: str
+    value: str | tuple[str, str] | None
+
+
 BIRTHDAY_APP_CLIENT_NOT_REQUIRED: Any = ...
 
 
@@ -110,6 +124,41 @@ class BirthdayAppClient:
             if value is not BIRTHDAY_APP_CLIENT_NOT_REQUIRED
         } or None
 
+    @staticmethod
+    def _apply_security_params(
+        security_params: Sequence[BirthdayAppClientSecurityParam] | None,
+        header_params: MutableMapping[str, Any],
+        cookie_params: MutableMapping[str, Any],
+        query_params: MutableMapping[str, Any],
+    ) -> None:
+        for kind, name, value in security_params or ():
+            if value is BIRTHDAY_APP_CLIENT_NOT_REQUIRED or value is None:
+                continue
+            target: MutableMapping[str, Any]
+            encoded: str
+            if kind == "http_bearer" and isinstance(value, str):
+                target, encoded = header_params, f"Bearer {value}"
+            elif kind == "http_basic" and isinstance(value, tuple):
+                user_pass = b64encode(f"{value[0]}:{value[1]}".encode()).decode("ascii")
+                target, encoded = header_params, f"Basic {user_pass}"
+            elif kind == "api_key_header" and isinstance(value, str):
+                target, encoded = header_params, value
+            elif kind == "api_key_cookie" and isinstance(value, str):
+                target, encoded = cookie_params, value
+            elif kind == "api_key_query" and isinstance(value, str):
+                target, encoded = query_params, value
+            else:
+                raise TypeError(
+                    f"Security param `{name}` of kind `{kind}` has "
+                    f"incompatible value type `{type(value).__name__}`."
+                )
+            if name in target and target[name] is not BIRTHDAY_APP_CLIENT_NOT_REQUIRED:
+                raise RuntimeError(
+                    f"Security param `{name}` conflicts with an already-set "
+                    f"{kind.split('_', 1)[0]} param of the same name."
+                )
+            target[name] = encoded
+
     def _route_handler(
         self,
         *,
@@ -122,6 +171,7 @@ class BirthdayAppClient:
         header_params: Mapping[str, Any] | None = None,
         cookie_params: Mapping[str, Any] | None = None,
         body_params: Mapping[str, Any] | None = None,
+        security_params: Sequence[BirthdayAppClientSecurityParam] | None = None,
         is_body_embedded: bool = False,
         is_streaming_json: bool = False,
         raise_if_not_default_status: bool = False,
@@ -143,7 +193,10 @@ class BirthdayAppClient:
         if body and not is_body_embedded:
             body = next(iter(body.values()))
 
-        cookies = self._filter_and_encode_params(cookie_params)
+        headers = self._filter_and_encode_params(header_params) or {}
+        cookies = self._filter_and_encode_params(cookie_params) or {}
+        queries = self._filter_and_encode_params(query_params) or {}
+        self._apply_security_params(security_params, headers, cookies, queries)
         if cookies:
             warn(
                 "Setting cookie parameters directly on an endpoint function is "
@@ -173,9 +226,9 @@ class BirthdayAppClient:
         response = self.client.request(
             method.name,
             url,
-            params=self._filter_and_encode_params(query_params),
-            headers=self._filter_and_encode_params(header_params),
-            cookies=cookies,
+            params=queries or None,
+            headers=headers or None,
+            cookies=cookies or None,
             json=body,
             timeout=timeout or USE_CLIENT_DEFAULT,
         )
