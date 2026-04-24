@@ -10,8 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Support for [FastAPI security schemes](https://fastapi.tiangolo.com/tutorial/security/). Each scheme used by a route becomes a parameter on the generated client method, with the value placed into the correct HTTP header, cookie, or query on the wire. Supported schemes: `HTTPBearer`, `HTTPBasic`, `APIKeyHeader`, `APIKeyCookie`, `APIKeyQuery`, `OAuth2PasswordBearer`, `OAuth2AuthorizationCodeBearer`, and `OpenIdConnect`. For bearer-style schemes the parameter is a `str` token (the generated client prepends the `Bearer ` scheme); for `HTTPBasic` it is a `tuple[str, str]` of `(username, password)` (the client base64-encodes it); for API-key schemes it is a `str`. Schemes constructed with `auto_error=False` produce optional parameters. `HTTPDigest` and `OAuth2PasswordRequestForm` remain unsupported.
 
+### Changed
+
+- Endpoints annotated `-> None` now produce a generated client method whose `data` is typed as `None` (and whose `model` is `type[None]`) instead of `Any`.
+
 ### Fixed
 
+- Handle empty response bodies (e.g. HTTP 204 `NO_CONTENT`). Previously, such endpoint (most commonly declared with `status_code=204`) raised `pydantic.ValidationError` in the generated client.
 - Stop rejecting routes with shared sub-dependency params. Parameters declared by multiple (sub-)dependencies of the same route (e.g. two `Depends(...)` both taking `item_id: Annotated[UUID7, Path()]`) are now collapsed into a single client parameter instead of raising a false-positive `parameter ... whose name is not unique` error. Genuine conflicts — same name with different kinds (e.g. Query vs Header), same kind with different aliases, or same kind+name with incompatible types — still fail generation, now with a clearer message distinguishing "not unique" from "declared with incompatible definitions".
 
 ## [0.3.0](https://github.com/lschmelzeisen/fastapi-typed-client/releases/tag/v0.3.0) - 2026-04-15

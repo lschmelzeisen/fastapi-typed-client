@@ -241,7 +241,14 @@ class ClientCodeGenerator:
         lines = []
         for response in responses:
             status_str = f"{self._impr(HTTPStatus)}.{response.status.name}"
-            type_str = self._get_response_type_code(response.type_)
+            # The dict holds runtime types. `NoneType` renders as `None` in the
+            # annotation form (via the import registry), but at runtime we need
+            # the NoneType class itself to match the declared `type[None]`.
+            type_str = (
+                "type(None)"
+                if response.type_ is type(None)
+                else self._get_response_type_code(response.type_)
+            )
             lines.append(f"{status_str}: {type_str},\n")
         return f"models={{\n{indent(''.join(lines))}}},"
 

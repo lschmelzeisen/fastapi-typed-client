@@ -242,7 +242,9 @@ class FastAPIClientBase:
 
             data = data_iter()
         else:
-            data = TypeAdapter(model).validate_json(response.text)
+            # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so the
+            # declared model still validatess.
+            data = TypeAdapter(model).validate_json(response.text or "null")
 
         result = FastAPIClientResult(
             status=status,
@@ -388,7 +390,9 @@ class FastAPIClientAsyncBase:
             text = ""
             async for part in response.aiter_text():
                 text += part
-            data = TypeAdapter(model).validate_json(text)
+            # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so the
+            # declared model still validate.
+            data = TypeAdapter(model).validate_json(text or "null")
 
         result = FastAPIClientResult(
             status=status,

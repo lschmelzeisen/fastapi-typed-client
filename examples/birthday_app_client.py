@@ -21,6 +21,10 @@ from typing import (
 )
 from warnings import warn
 
+from birthday_app import (
+    BirthdayData,
+    GetBirthdayError,
+)
 from fastapi.encoders import jsonable_encoder
 from httpx import (
     USE_CLIENT_DEFAULT,
@@ -31,11 +35,6 @@ from httpx import (
 from pydantic import (
     BaseModel,
     TypeAdapter,
-)
-
-from birthday_app import (
-    BirthdayData,
-    GetBirthdayError,
 )
 
 if TYPE_CHECKING:
@@ -243,7 +242,9 @@ class BirthdayAppClient:
 
             data = data_iter()
         else:
-            data = TypeAdapter(model).validate_json(response.text)
+            # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so the
+            # declared model still validatess.
+            data = TypeAdapter(model).validate_json(response.text or "null")
 
         result = BirthdayAppClientResult(
             status=status,
@@ -274,7 +275,10 @@ class BirthdayAppClient:
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]
-        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
+        | BirthdayAppClientResult[
+            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
+            BirthdayAppClientHTTPValidationError,
+        ]
     ): ...
     def register_birthday(
         self,
@@ -316,7 +320,10 @@ class BirthdayAppClient:
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]
         | BirthdayAppClientResult[Literal[HTTPStatus.NOT_FOUND], GetBirthdayError]
-        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
+        | BirthdayAppClientResult[
+            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
+            BirthdayAppClientHTTPValidationError,
+        ]
     ): ...
     def get_birthday(
         self,

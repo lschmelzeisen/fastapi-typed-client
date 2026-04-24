@@ -8,6 +8,7 @@ from collections.abc import (
 )
 from enum import Enum, auto
 from http import HTTPMethod, HTTPStatus
+from inspect import signature
 from typing import Any, NamedTuple, get_args, get_origin
 
 from fastapi._compat import ModelField
@@ -315,11 +316,12 @@ def _parse_responses(
     default_status = (
         HTTPStatus(route.status_code) if route.status_code else HTTPStatus.OK
     )
-    default_type = (
-        route.response_field.field_info.annotation or type(Any)
-        if route.response_field
-        else type(Any)
-    )
+    if route.response_field and route.response_field.field_info.annotation:
+        default_type = route.response_field.field_info.annotation
+    elif signature(route.endpoint).return_annotation is None:
+        default_type = type(None)
+    else:
+        default_type = type(Any)
     default_type_origin = get_origin(default_type)
     if (
         is_streaming_json
