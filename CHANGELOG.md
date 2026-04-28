@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Support for [FastAPI security schemes](https://fastapi.tiangolo.com/tutorial/security/). Each scheme used by a route becomes a parameter on the generated client method, with the value placed into the correct HTTP header, cookie, or query on the wire. Supported schemes: `HTTPBearer`, `HTTPBasic`, `APIKeyHeader`, `APIKeyCookie`, `APIKeyQuery`, `OAuth2PasswordBearer`, `OAuth2AuthorizationCodeBearer`, and `OpenIdConnect`. For bearer-style schemes the parameter is a `str` token (the generated client prepends the `Bearer ` scheme); for `HTTPBasic` it is a `tuple[str, str]` of `(username, password)` (the client base64-encodes it); for API-key schemes it is a `str`. Schemes constructed with `auto_error=False` produce optional parameters. `HTTPDigest` and `OAuth2PasswordRequestForm` remain unsupported.
+- Support for FastAPI's native streaming endpoint patterns (added in FastAPI 0.134.0 / 0.135.0):
+  - [Streaming JSON Lines](https://fastapi.tiangolo.com/tutorial/stream-json-lines/): endpoints declared as `-> Iterable[T]` / `-> AsyncIterable[T]` (without an explicit `response_class`) are detected automatically and the generated client method returns `Iterator[T]` (or `AsyncIterator[T]`) yielding parsed `T`s.
+  - [Server-Sent Events](https://fastapi.tiangolo.com/tutorial/server-sent-events/): endpoints with `response_class=EventSourceResponse` are detected automatically. The generated client method returns `Iterator[FastAPIClientSSE[T]]` (or async equivalent), where the new `FastAPIClientSSE[Data]` class subclasses `fastapi.sse.ServerSentEvent` and exposes the `data` (parsed as `T`), `event`, `id`, `retry`, and `comment` fields.
+  - [Raw bytes/string streaming](https://fastapi.tiangolo.com/advanced/stream-data/): endpoints with `response_class=StreamingResponse` returning `Iterable[bytes]` / `Iterable[str]` (or async equivalents) are detected automatically. The generated client method returns `Iterator[bytes]` / `Iterator[str]` (or async equivalents) yielding the chunks unmodified.
 
 ### Changed
 

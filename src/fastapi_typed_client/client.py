@@ -7,6 +7,7 @@ from warnings import warn
 
 from fastapi import FastAPI
 from fastapi.encoders import jsonable_encoder
+from fastapi.sse import ServerSentEvent
 from httpx import (
     USE_CLIENT_DEFAULT,
     ASGITransport,
@@ -28,6 +29,7 @@ _IMPORTS = [
     NamedTuple,
     Response,
     Sequence,
+    ServerSentEvent,
     Timeout,
     TypeAdapter,
     TypedDict,
@@ -92,6 +94,10 @@ class FastAPIClientSecurityParam(NamedTuple):
     ]
     name: str
     value: str | tuple[str, str] | None
+
+
+class FastAPIClientSSE[Data](ServerSentEvent):
+    data: Data | None = None
 
 
 FASTAPI_CLIENT_NOT_REQUIRED: Any = ...
@@ -172,7 +178,10 @@ class FastAPIClientBase:
         body_params: Mapping[str, Any] | None = None,
         security_params: Sequence[FastAPIClientSecurityParam] | None = None,
         is_body_embedded: bool = False,
-        is_streaming_json: bool = False,
+        streaming_kind: Literal[
+            "json_lines", "server_sent_events", "raw_bytes", "raw_str"
+        ]
+        | None = None,
         raise_if_not_default_status: bool = False,
         client_exts: FastAPIClientExtensions | None = None,
     ) -> FastAPIClientResult[HTTPStatus, Any]:
@@ -234,13 +243,8 @@ class FastAPIClientBase:
         status = HTTPStatus(response.status_code)
 
         model = models[status]
-        if is_streaming_json and status == default_status:
-
-            def data_iter() -> Iterator[Any]:
-                for part in response.iter_lines():
-                    yield TypeAdapter(model).validate_json(part)
-
-            data = data_iter()
+        if streaming_kind is not None and status == default_status:
+            data = self._build_streaming_data(streaming_kind, response, model)
         else:
             # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so the
             # declared model still validatess.
@@ -257,6 +261,95 @@ class FastAPIClientBase:
                 default_status=default_status, result=result
             )
         return result
+
+    @classmethod
+    def _build_streaming_data(
+        cls,
+        streaming_kind: Literal[
+            "json_lines", "server_sent_events", "raw_bytes", "raw_str"
+        ],
+        response: Response,
+        model: Any,  # noqa: ANN401
+    ) -> Iterator[Any]:
+        if streaming_kind == "raw_bytes":
+            return response.iter_bytes()
+        if streaming_kind == "raw_str":
+            return response.iter_text()
+        if streaming_kind == "json_lines":
+
+            def jsonl_iter() -> Iterator[Any]:
+                adapter = TypeAdapter(model)
+                for part in response.iter_lines():
+                    if part:
+                        yield adapter.validate_json(part)
+
+            return jsonl_iter()
+
+        def sse_iter() -> Iterator[Any]:
+            adapter = TypeAdapter(model)
+            for fields in cls._iter_sse_event_fields(response.iter_lines()):
+                if "data" in fields:
+                    fields = {
+                        **fields,
+                        "data": adapter.validate_json(fields["data"]),
+                    }
+                yield FastAPIClientSSE[model].model_validate(fields)
+
+        return sse_iter()
+
+    @classmethod
+    def _iter_sse_event_fields(
+        cls, lines: Iterator[str]
+    ) -> Iterator[Mapping[str, Any]]:
+        fields: dict[str, Any] = {}
+        data_lines: list[str] = []
+        comment_lines: list[str] = []
+        for line in lines:
+            if line:
+                cls._accumulate_sse_line(line, fields, data_lines, comment_lines)
+                continue
+            event = cls._finalize_sse_event(fields, data_lines, comment_lines)
+            if event is not None:
+                yield event
+            # Spec deviation: `lastEventId` doesn't persist across events. Each
+            # yielded event reflects only what was on the wire for it; events
+            # without an `id:` line surface as `id=None`.
+            fields, data_lines, comment_lines = {}, [], []
+        event = cls._finalize_sse_event(fields, data_lines, comment_lines)
+        if event is not None:
+            yield event
+
+    @staticmethod
+    def _accumulate_sse_line(
+        line: str,
+        fields: dict[str, Any],
+        data_lines: list[str],
+        comment_lines: list[str],
+    ) -> None:
+        if line.startswith(":"):
+            comment_lines.append(line[1:].removeprefix(" "))
+            return
+        field, _, value = line.partition(":")
+        value = value.removeprefix(" ")
+        if field == "data":
+            data_lines.append(value)
+        elif field in ("event", "id"):
+            fields[field] = value
+        elif field == "retry" and value.isascii() and value.isdigit():
+            fields[field] = int(value)
+
+    @staticmethod
+    def _finalize_sse_event(
+        fields: dict[str, Any], data_lines: list[str], comment_lines: list[str]
+    ) -> dict[str, Any] | None:
+        if data_lines:
+            fields["data"] = "\n".join(data_lines)
+        if comment_lines:
+            fields["comment"] = "\n".join(comment_lines)
+        # Spec deviation: comment- or metadata-only events (no `data:` lines)
+        # are still dispatched. The spec says to drop them, but we surface them
+        # so `FastAPIClientSSE.comment` is reachable from the client.
+        return fields or None
 
 
 class FastAPIClientAsyncBase:
@@ -334,7 +427,10 @@ class FastAPIClientAsyncBase:
         body_params: Mapping[str, Any] | None = None,
         security_params: Sequence[FastAPIClientSecurityParam] | None = None,
         is_body_embedded: bool = False,
-        is_streaming_json: bool = False,
+        streaming_kind: Literal[
+            "json_lines", "server_sent_events", "raw_bytes", "raw_str"
+        ]
+        | None = None,
         raise_if_not_default_status: bool = False,
         client_exts: FastAPIClientExtensions | None = None,
     ) -> FastAPIClientResult[HTTPStatus, Any]:
@@ -379,13 +475,8 @@ class FastAPIClientAsyncBase:
         status = HTTPStatus(response.status_code)
 
         model = models[status]
-        if is_streaming_json and status == default_status:
-
-            async def data_iter() -> AsyncIterator[Any]:
-                async for part in response.aiter_lines():
-                    yield TypeAdapter(model).validate_json(part)
-
-            data = data_iter()
+        if streaming_kind is not None and status == default_status:
+            data = self._build_streaming_data(streaming_kind, response, model)
         else:
             text = ""
             async for part in response.aiter_text():
@@ -405,3 +496,92 @@ class FastAPIClientAsyncBase:
                 default_status=default_status, result=result
             )
         return result
+
+    @classmethod
+    def _build_streaming_data(
+        cls,
+        streaming_kind: Literal[
+            "json_lines", "server_sent_events", "raw_bytes", "raw_str"
+        ],
+        response: Response,
+        model: Any,  # noqa: ANN401
+    ) -> AsyncIterator[Any]:
+        if streaming_kind == "raw_bytes":
+            return response.aiter_bytes()
+        if streaming_kind == "raw_str":
+            return response.aiter_text()
+        if streaming_kind == "json_lines":
+
+            async def jsonl_iter() -> AsyncIterator[Any]:
+                adapter = TypeAdapter(model)
+                async for part in response.aiter_lines():
+                    if part:
+                        yield adapter.validate_json(part)
+
+            return jsonl_iter()
+
+        async def sse_iter() -> AsyncIterator[Any]:
+            adapter = TypeAdapter(model)
+            async for fields in cls._aiter_sse_event_fields(response.aiter_lines()):
+                if "data" in fields:
+                    fields = {
+                        **fields,
+                        "data": adapter.validate_json(fields["data"]),
+                    }
+                yield FastAPIClientSSE[model].model_validate(fields)
+
+        return sse_iter()
+
+    @classmethod
+    async def _aiter_sse_event_fields(
+        cls, lines: AsyncIterator[str]
+    ) -> AsyncIterator[Mapping[str, Any]]:
+        fields: dict[str, Any] = {}
+        data_lines: list[str] = []
+        comment_lines: list[str] = []
+        async for line in lines:
+            if line:
+                cls._accumulate_sse_line(line, fields, data_lines, comment_lines)
+                continue
+            event = cls._finalize_sse_event(fields, data_lines, comment_lines)
+            if event is not None:
+                yield event
+            # Spec deviation: `lastEventId` doesn't persist across events. Each
+            # yielded event reflects only what was on the wire for it; events
+            # without an `id:` line surface as `id=None`.
+            fields, data_lines, comment_lines = {}, [], []
+        event = cls._finalize_sse_event(fields, data_lines, comment_lines)
+        if event is not None:
+            yield event
+
+    @staticmethod
+    def _accumulate_sse_line(
+        line: str,
+        fields: dict[str, Any],
+        data_lines: list[str],
+        comment_lines: list[str],
+    ) -> None:
+        if line.startswith(":"):
+            comment_lines.append(line[1:].removeprefix(" "))
+            return
+        field, _, value = line.partition(":")
+        value = value.removeprefix(" ")
+        if field == "data":
+            data_lines.append(value)
+        elif field in ("event", "id"):
+            fields[field] = value
+        elif field == "retry" and value.isascii() and value.isdigit():
+            fields[field] = int(value)
+
+    @staticmethod
+    def _finalize_sse_event(
+        fields: dict[str, Any], data_lines: list[str], comment_lines: list[str]
+    ) -> dict[str, Any] | None:
+        if data_lines:
+            fields["data"] = "\n".join(data_lines)
+        if comment_lines:
+            fields["comment"] = "\n".join(comment_lines)
+        # Spec deviation: comment- or metadata-only events (no `data:` lines)
+        # are still dispatched. The spec says to drop them, but we surface them
+        # so `FastAPIClientSSE.comment` is reachable from the client.
+        return fields or None

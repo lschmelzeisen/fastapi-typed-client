@@ -20,6 +20,7 @@ class ClientTester(Protocol):
         httpx_client: Client | None = None,
         assert_type_check_passes: bool = True,
         assert_linting_passes: bool = True,
+        assert_sorting_of_imports: bool = True,
         assert_format_of_boilerplate_code: bool = True,
         assert_format_of_generated_code: bool = True,
     ) -> None: ...
@@ -37,6 +38,7 @@ class AsyncClientTester(Protocol):
         httpx_client: AsyncClient | None = None,
         assert_type_check_passes: bool = True,
         assert_linting_passes: bool = True,
+        assert_sorting_of_imports: bool = True,
         assert_format_of_boilerplate_code: bool = True,
         assert_format_of_generated_code: bool = True,
     ) -> None: ...

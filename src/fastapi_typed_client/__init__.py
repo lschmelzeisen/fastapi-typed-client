@@ -10,6 +10,7 @@ from .client import (
     FastAPIClientNotDefaultStatusError,
     FastAPIClientResult,
     FastAPIClientSecurityParam,
+    FastAPIClientSSE,
     FastAPIClientValidationError,
 )
 
@@ -21,6 +22,7 @@ __all__ = [
     "FastAPIClientHTTPValidationError",
     "FastAPIClientNotDefaultStatusError",
     "FastAPIClientResult",
+    "FastAPIClientSSE",
     "FastAPIClientSecurityParam",
     "FastAPIClientValidationError",
     "__version__",

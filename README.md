@@ -287,14 +287,30 @@ For endpoints that can return errors (either because they define errors as [addi
 
 If your set the `raise_if_not_default_status` parameter to `True` or use `--raise-if-not-default-status` when generating your client, the return type will just be the default status code (i.e., `200 Ok` or the one defined via `status_code` in the endpoint's decorator) with its response model. Should the endpoint return a different status code, a `FastAPIClientNotDefaultStatusError` will be raised, which contains the response status code and deserialized data.
 
-There is experimental support for endpoints returning streams of JSON objects. The detection works by checking if the endpoint's response class is a subclass of both FastAPI's [StreamingResponse](https://fastapi.tiangolo.com/reference/responses/#fastapi.responses.StreamingResponse) and [JSONResponse](https://fastapi.tiangolo.com/reference/responses/#fastapi.responses.JSONResponse) classes. The generated method for this endpoint will then return an iterator over all JSON objects contained in the newline-delimited stream from the endpoint. It can be used like this (see the [test for this feature](./tests/test_core/test_streaming_json_response.py) for an example):
+There is experimental support for streaming endpoints. The following patterns are detected automatically from FastAPI's route metadata, and the streaming type is only applied to the default response of an endpoint (additional responses still produce regular `data` for their respective status codes):
 
-```python
-for item in client.your_streaming_endpoint().data:
-    print(item.field)
-```
+- **JSON Lines** ([FastAPI docs](https://fastapi.tiangolo.com/tutorial/stream-json-lines/)). Endpoints declared as `-> Iterable[T]` / `-> AsyncIterable[T]` (without an explicit `response_class`), or the older custom-subclass-of-`StreamingResponse`-and-`JSONResponse` pattern. The generated method returns `Iterator[T]` (or `AsyncIterator[T]` for async clients):
 
-For now, this detection of streaming JSON output is only available for the default response of an endpoint and not for additional responses.
+  ```python
+  for item in client.your_endpoint().data:
+      print(item.field)
+  ```
+
+- **Server-Sent Events** ([FastAPI docs](https://fastapi.tiangolo.com/tutorial/server-sent-events/)). Endpoints with `response_class=EventSourceResponse`. The generated method returns `Iterator[FastAPIClientSSE[T]]` (or async equivalent), exposing the `data` (parsed as `T`), `event`, `id`, `retry`, and `comment` fields of each SSE event:
+
+  ```python
+  for event in client.your_endpoint().data:
+      print(event.event, event.id, event.data)
+  ```
+
+- **Raw bytes/string streaming** ([FastAPI docs](https://fastapi.tiangolo.com/advanced/stream-data/)). Endpoints with `response_class=StreamingResponse` and a return annotation of `Iterable[bytes]` / `AsyncIterable[bytes]` (or `str`). The generated method returns `Iterator[bytes]` / `Iterator[str]` (or async equivalents) yielding chunks unmodified:
+
+  ```python
+  for chunk in client.your_endpoint().data:
+      handle(chunk)
+  ```
+
+See the corresponding tests for end-to-end examples ([test_streaming_json_response.py](./tests/test_core/test_streaming_json_response.py), [test_stream_json_lines.py](./tests/test_core/test_stream_json_lines.py), [test_stream_sse.py](./tests/test_core/test_stream_sse.py), [test_stream_raw.py](./tests/test_core/test_stream_raw.py)).
 
 ### Auxiliary classes
 
@@ -333,6 +349,19 @@ Instance attributes of `FastAPIClientValidationError`:
 - `loc: Sequence[str | int]`: Location of the error
 - `msg: str`: Error message
 - `type: str`: Error type
+
+#### `FastAPIClientSSE[Data]`
+
+Generic Pydantic model returned by streaming SSE endpoint methods. Subclasses [`fastapi.sse.ServerSentEvent`](https://fastapi.tiangolo.com/tutorial/server-sent-events/) and overrides the `data` field with the endpoint-specific type.
+
+Instance attributes:
+
+- `data: Data | None`: The deserialized event payload (or `None` for events that only carry metadata such as comments)
+- `event: str | None`: Optional event type name
+- `id: str | None`: Optional event id
+- `retry: int | None`: Optional reconnection time in milliseconds
+- `comment: str | None`: Optional comment line(s)
+- `raw_data: str | None`: Pre-formatted, non-JSON `data:` payload (mutually exclusive with `data`)
 
 #### `FastAPIClientExtensions`
   

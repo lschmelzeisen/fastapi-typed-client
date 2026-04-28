@@ -15,6 +15,7 @@ from .client import (
     FastAPIClientNotDefaultStatusError,
     FastAPIClientResult,
     FastAPIClientSecurityParam,
+    FastAPIClientSSE,
     FastAPIClientValidationError,
 )
 
@@ -26,6 +27,7 @@ _RESERVED_TITLES = (
     FastAPIClientHTTPValidationError.__name__,
     FastAPIClientNotDefaultStatusError.__name__,
     FastAPIClientSecurityParam.__name__,
+    FastAPIClientSSE.__name__,
     FastAPIClientBase.__name__,
     FastAPIClientAsyncBase.__name__,
     "FASTAPI_CLIENT_NOT_REQUIRED",

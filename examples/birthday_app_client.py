@@ -21,11 +21,8 @@ from typing import (
 )
 from warnings import warn
 
-from birthday_app import (
-    BirthdayData,
-    GetBirthdayError,
-)
 from fastapi.encoders import jsonable_encoder
+from fastapi.sse import ServerSentEvent
 from httpx import (
     USE_CLIENT_DEFAULT,
     Client,
@@ -35,6 +32,11 @@ from httpx import (
 from pydantic import (
     BaseModel,
     TypeAdapter,
+)
+
+from birthday_app import (
+    BirthdayData,
+    GetBirthdayError,
 )
 
 if TYPE_CHECKING:
@@ -92,6 +94,10 @@ class BirthdayAppClientSecurityParam(NamedTuple):
     ]
     name: str
     value: str | tuple[str, str] | None
+
+
+class BirthdayAppClientSSE[Data](ServerSentEvent):
+    data: Data | None = None
 
 
 BIRTHDAY_APP_CLIENT_NOT_REQUIRED: Any = ...
@@ -172,7 +178,10 @@ class BirthdayAppClient:
         body_params: Mapping[str, Any] | None = None,
         security_params: Sequence[BirthdayAppClientSecurityParam] | None = None,
         is_body_embedded: bool = False,
-        is_streaming_json: bool = False,
+        streaming_kind: Literal[
+            "json_lines", "server_sent_events", "raw_bytes", "raw_str"
+        ]
+        | None = None,
         raise_if_not_default_status: bool = False,
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> BirthdayAppClientResult[HTTPStatus, Any]:
@@ -234,13 +243,8 @@ class BirthdayAppClient:
         status = HTTPStatus(response.status_code)
 
         model = models[status]
-        if is_streaming_json and status == default_status:
-
-            def data_iter() -> Iterator[Any]:
-                for part in response.iter_lines():
-                    yield TypeAdapter(model).validate_json(part)
-
-            data = data_iter()
+        if streaming_kind is not None and status == default_status:
+            data = self._build_streaming_data(streaming_kind, response, model)
         else:
             # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so the
             # declared model still validatess.
@@ -257,6 +261,95 @@ class BirthdayAppClient:
                 default_status=default_status, result=result
             )
         return result
+
+    @classmethod
+    def _build_streaming_data(
+        cls,
+        streaming_kind: Literal[
+            "json_lines", "server_sent_events", "raw_bytes", "raw_str"
+        ],
+        response: Response,
+        model: Any,  # noqa: ANN401
+    ) -> Iterator[Any]:
+        if streaming_kind == "raw_bytes":
+            return response.iter_bytes()
+        if streaming_kind == "raw_str":
+            return response.iter_text()
+        if streaming_kind == "json_lines":
+
+            def jsonl_iter() -> Iterator[Any]:
+                adapter = TypeAdapter(model)
+                for part in response.iter_lines():
+                    if part:
+                        yield adapter.validate_json(part)
+
+            return jsonl_iter()
+
+        def sse_iter() -> Iterator[Any]:
+            adapter = TypeAdapter(model)
+            for fields in cls._iter_sse_event_fields(response.iter_lines()):
+                if "data" in fields:
+                    fields = {
+                        **fields,
+                        "data": adapter.validate_json(fields["data"]),
+                    }
+                yield BirthdayAppClientSSE[model].model_validate(fields)
+
+        return sse_iter()
+
+    @classmethod
+    def _iter_sse_event_fields(
+        cls, lines: Iterator[str]
+    ) -> Iterator[Mapping[str, Any]]:
+        fields: dict[str, Any] = {}
+        data_lines: list[str] = []
+        comment_lines: list[str] = []
+        for line in lines:
+            if line:
+                cls._accumulate_sse_line(line, fields, data_lines, comment_lines)
+                continue
+            event = cls._finalize_sse_event(fields, data_lines, comment_lines)
+            if event is not None:
+                yield event
+            # Spec deviation: `lastEventId` doesn't persist across events. Each
+            # yielded event reflects only what was on the wire for it; events
+            # without an `id:` line surface as `id=None`.
+            fields, data_lines, comment_lines = {}, [], []
+        event = cls._finalize_sse_event(fields, data_lines, comment_lines)
+        if event is not None:
+            yield event
+
+    @staticmethod
+    def _accumulate_sse_line(
+        line: str,
+        fields: dict[str, Any],
+        data_lines: list[str],
+        comment_lines: list[str],
+    ) -> None:
+        if line.startswith(":"):
+            comment_lines.append(line[1:].removeprefix(" "))
+            return
+        field, _, value = line.partition(":")
+        value = value.removeprefix(" ")
+        if field == "data":
+            data_lines.append(value)
+        elif field in ("event", "id"):
+            fields[field] = value
+        elif field == "retry" and value.isascii() and value.isdigit():
+            fields[field] = int(value)
+
+    @staticmethod
+    def _finalize_sse_event(
+        fields: dict[str, Any], data_lines: list[str], comment_lines: list[str]
+    ) -> dict[str, Any] | None:
+        if data_lines:
+            fields["data"] = "\n".join(data_lines)
+        if comment_lines:
+            fields["comment"] = "\n".join(comment_lines)
+        # Spec deviation: comment- or metadata-only events (no `data:` lines)
+        # are still dispatched. The spec says to drop them, but we surface them
+        # so `BirthdayAppClientSSE.comment` is reachable from the client.
+        return fields or None
 
     @overload
     def register_birthday(
@@ -275,10 +368,7 @@ class BirthdayAppClient:
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]
-        | BirthdayAppClientResult[
-            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
-            BirthdayAppClientHTTPValidationError,
-        ]
+        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
     ): ...
     def register_birthday(
         self,
@@ -320,10 +410,7 @@ class BirthdayAppClient:
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]
         | BirthdayAppClientResult[Literal[HTTPStatus.NOT_FOUND], GetBirthdayError]
-        | BirthdayAppClientResult[
-            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
-            BirthdayAppClientHTTPValidationError,
-        ]
+        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
     ): ...
     def get_birthday(
         self,

@@ -10,7 +10,13 @@ from sys import stdlib_module_names
 from typing import Any, Literal, NamedTuple, overload
 from warnings import warn
 
-from ._parser import Route, RouteParam, RouteParamKind, RouteResponse
+from ._parser import (
+    Route,
+    RouteParam,
+    RouteParamKind,
+    RouteResponse,
+    RouteStreamingKind,
+)
 from ._utils import Import, ImportRegistry, dq_str_repr, indent, to_constant_case
 from .client import (
     _IMPORTS,
@@ -25,6 +31,7 @@ from .client import (
     FastAPIClientNotDefaultStatusError,
     FastAPIClientResult,
     FastAPIClientSecurityParam,
+    FastAPIClientSSE,
     FastAPIClientValidationError,
 )
 
@@ -36,6 +43,7 @@ class _Identifiers(NamedTuple):
     http_validation_error: str
     not_default_status_error: str
     security_param: str
+    sse: str
     not_required: str
     base_class: str
     client_class: str
@@ -48,6 +56,7 @@ class _Identifiers(NamedTuple):
             FastAPIClientHTTPValidationError.__name__: self.http_validation_error,
             FastAPIClientNotDefaultStatusError.__name__: self.not_default_status_error,
             FastAPIClientSecurityParam.__name__: self.security_param,
+            FastAPIClientSSE.__name__: self.sse,
             "FASTAPI_CLIENT_NOT_REQUIRED": self.not_required,
             FastAPIClientBase.__name__: self.base_class,
             FastAPIClientAsyncBase.__name__: self.base_class,
@@ -93,6 +102,7 @@ class ClientCodeGenerator:
                 http_validation_error=FastAPIClientHTTPValidationError.__name__,
                 not_default_status_error=FastAPIClientNotDefaultStatusError.__name__,
                 security_param=FastAPIClientSecurityParam.__name__,
+                sse=FastAPIClientSSE.__name__,
                 not_required="FASTAPI_CLIENT_NOT_REQUIRED",
                 base_class=self._base_class.__name__,
                 client_class=self._title,
@@ -104,6 +114,7 @@ class ClientCodeGenerator:
             http_validation_error=f"{self._title}HTTPValidationError",
             not_default_status_error=f"{self._title}NotDefaultStatusError",
             security_param=f"{self._title}SecurityParam",
+            sse=f"{self._title}SSE",
             not_required=(
                 to_constant_case(self._title).replace("FAST_API", "FASTAPI")
                 + "_NOT_REQUIRED"
@@ -169,7 +180,7 @@ class ClientCodeGenerator:
             + indent(self._get_route_specific_params_code(route.params))
             + indent(self._get_route_generic_params_code(raise_if_not_default_status))
             + ") -> "
-            + self._get_route_responses_code(responses, route.is_streaming_json)
+            + self._get_route_responses_code(responses, route.streaming_kind)
         )
 
     def _get_route_specific_params_code(self, params: Sequence[RouteParam]) -> str:
@@ -203,7 +214,7 @@ class ClientCodeGenerator:
     def _get_route_responses_code(
         self,
         responses: RouteResponse | Collection[RouteResponse] | None,
-        is_streaming_json: bool,
+        streaming_kind: RouteStreamingKind | None,
     ) -> str:
         if not responses:
             return f"{self._idents.result}[{self._impr(HTTPStatus)}, {self._impr(Any)}]"
@@ -217,20 +228,29 @@ class ClientCodeGenerator:
         for i, response in enumerate(responses):
             if i != 0:
                 code += "\n    | "
-            response_type = response.type_
-            if i == 0 and is_streaming_json:
-                response_type = (Iterator if not self._async else AsyncIterator)[
-                    response_type
-                ]
+            response_type_code = self._get_response_type_code(response.type_)
+            if i == 0 and streaming_kind is not None:
+                response_type_code = self._wrap_streaming_response_type_code(
+                    response_type_code, streaming_kind
+                )
             code += (
                 f"{self._idents.result}["
                 f"{self._impr(Literal)}[{self._impr(HTTPStatus)}.{response.status.name}], "
-                f"{self._get_response_type_code(response_type)}"
+                f"{response_type_code}"
                 "]"
             )
         if len(responses) > 1:
             code += "\n)"
         return code
+
+    def _wrap_streaming_response_type_code(
+        self, response_type_code: str, streaming_kind: RouteStreamingKind
+    ) -> str:
+        iter_class = Iterator if not self._async else AsyncIterator
+        iter_str = self._impr(iter_class)
+        if streaming_kind is RouteStreamingKind.SERVER_SENT_EVENTS:
+            return f"{iter_str}[{self._idents.sse}[{response_type_code}]]"
+        return f"{iter_str}[{response_type_code}]"
 
     def _get_response_type_code(self, type_: Any) -> str:  # noqa: ANN401
         if type_ is FastAPIClientHTTPValidationError:
@@ -291,8 +311,10 @@ class ClientCodeGenerator:
         code = ""
         if route.is_body_embedded:
             code += f"is_body_embedded={route.is_body_embedded},\n"
-        if route.is_streaming_json:
-            code += f"is_streaming_json={route.is_streaming_json},\n"
+        if route.streaming_kind is not None:
+            code += (
+                f"streaming_kind={dq_str_repr(route.streaming_kind.name.lower())},\n"
+            )
         return code
 
 
@@ -323,9 +345,16 @@ class _BoilerplateCodeGenerator:
             for route in routes
             for param in route.params
         )
+        has_sse = any(
+            route.streaming_kind is RouteStreamingKind.SERVER_SENT_EVENTS
+            for route in routes
+        )
         if import_client_base:
             return self._generate_with_import_client_base(
-                has_not_required_params, has_validation_errors, has_security_params
+                has_not_required_params,
+                has_validation_errors,
+                has_security_params,
+                has_sse,
             )
         return self._generate_without_import_client_base(has_validation_errors)
 
@@ -334,6 +363,7 @@ class _BoilerplateCodeGenerator:
         has_not_required_params: bool,
         has_validation_errors: bool,
         has_security_params: bool,
+        has_sse: bool,
     ) -> str:
         # Manually write imports here so that modules are imported from specific
         # submodule instead of top-level module.
@@ -343,6 +373,7 @@ class _BoilerplateCodeGenerator:
             self._idents.result,
             self._idents.http_validation_error if has_validation_errors else None,
             self._idents.security_param if has_security_params else None,
+            self._idents.sse if has_sse else None,
             self._idents.not_required if has_not_required_params else None,
         ]:
             if import_name:
@@ -401,6 +432,7 @@ class _BoilerplateCodeGenerator:
             ),
             getsource(FastAPIClientNotDefaultStatusError),
             getsource(FastAPIClientSecurityParam),
+            getsource(FastAPIClientSSE),
             "FASTAPI_CLIENT_NOT_REQUIRED: Any = ...\n",
             "# TEST_MARKER_AFTER_BOILERPLATE\n" if self._add_test_markers else None,
             base_class_source_with_test_markers(),

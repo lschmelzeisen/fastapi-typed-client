@@ -12,13 +12,14 @@ from inspect import signature
 from typing import Any, NamedTuple, get_args, get_origin
 
 from fastapi._compat import ModelField
+from fastapi.datastructures import DefaultPlaceholder
 from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import (
     _get_flat_fields_from_params,
     get_flat_dependant,
     get_typed_return_annotation,
 )
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute, BaseRoute
 from fastapi.security import (
     APIKeyCookie,
@@ -31,6 +32,7 @@ from fastapi.security import (
     OpenIdConnect,
 )
 from fastapi.security.base import SecurityBase
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from ._utils import to_snake_case
 from .client import FastAPIClientHTTPValidationError
@@ -42,6 +44,8 @@ _DISALLOWED_PARAM_NAMES = {
     "HTTPMethod",
     "HTTPStatus",
 }
+
+_ITERABLE_CLASSES = (Iterator, Iterable, AsyncIterator, AsyncIterable)
 
 
 class RouteParamKind(Enum):
@@ -59,6 +63,13 @@ class RouteSecurityKind(Enum):
     API_KEY_HEADER = auto()
     API_KEY_COOKIE = auto()
     API_KEY_QUERY = auto()
+
+
+class RouteStreamingKind(Enum):
+    JSON_LINES = auto()
+    SERVER_SENT_EVENTS = auto()
+    RAW_BYTES = auto()
+    RAW_STR = auto()
 
 
 class RouteSecurity(NamedTuple):
@@ -88,7 +99,7 @@ class Route(NamedTuple):
     params: Sequence[RouteParam]
     responses: Mapping[HTTPStatus, RouteResponse]
     is_body_embedded: bool = False
-    is_streaming_json: bool = False
+    streaming_kind: RouteStreamingKind | None = None
 
 
 def parse_routes(routes: Iterable[BaseRoute]) -> Sequence[Route]:
@@ -116,16 +127,15 @@ def _parse_route(route: APIRoute) -> Route:
         )
 
     # TODO: would it be better to use route.response_class here?
-    type_ = get_typed_return_annotation(route.endpoint)
-    is_streaming_json = bool(
-        isinstance(type_, type)
-        and issubclass(type_, StreamingResponse)
-        and issubclass(type_, JSONResponse)
-    )
+    return_annotation = get_typed_return_annotation(route.endpoint)
+    streaming_kind = _detect_streaming_kind(route, return_annotation)
 
     params, is_body_embedded = _parse_params(route)
     responses, default_status = _parse_responses(
-        route, has_params=bool(params), is_streaming_json=is_streaming_json
+        route,
+        has_params=bool(params),
+        streaming_kind=streaming_kind,
+        return_annotation=return_annotation,
     )
 
     return Route(
@@ -136,8 +146,55 @@ def _parse_route(route: APIRoute) -> Route:
         params=params,
         is_body_embedded=is_body_embedded,
         responses={response.status: response for response in responses},
-        is_streaming_json=is_streaming_json,
+        streaming_kind=streaming_kind,
     )
+
+
+def _detect_streaming_kind(
+    route: APIRoute,
+    return_annotation: Any,  # noqa: ANN401
+) -> RouteStreamingKind | None:
+    response_class: type[Response] | None = (
+        None
+        if isinstance(route.response_class, DefaultPlaceholder)
+        else route.response_class
+    )
+
+    # Direct-return pattern: the return annotation is a `Response` subclass that the
+    # endpoint constructs and returns itself.
+    if isinstance(return_annotation, type):
+        if issubclass(return_annotation, EventSourceResponse):
+            return RouteStreamingKind.SERVER_SENT_EVENTS
+        if issubclass(return_annotation, StreamingResponse):
+            # Pre-FastAPI-0.134 manual streaming pattern.
+            if issubclass(return_annotation, JSONResponse):
+                return RouteStreamingKind.JSON_LINES
+            return RouteStreamingKind.RAW_BYTES
+
+    inner = _unwrap_iterable(return_annotation)
+    if response_class is not None:
+        if issubclass(response_class, EventSourceResponse):
+            return RouteStreamingKind.SERVER_SENT_EVENTS
+
+        if issubclass(response_class, StreamingResponse):
+            if inner is str:
+                return RouteStreamingKind.RAW_STR
+            return RouteStreamingKind.RAW_BYTES
+    elif inner is not None and inner not in (bytes, str):
+        return RouteStreamingKind.JSON_LINES
+
+    return None
+
+
+def _unwrap_iterable(type_: Any) -> Any:  # noqa: ANN401
+    origin = get_origin(type_)
+    if isinstance(origin, type) and any(
+        issubclass(origin, c) for c in _ITERABLE_CLASSES
+    ):
+        args = get_args(type_)
+        if args:
+            return args[0]
+    return None
 
 
 def _parse_params(route: APIRoute) -> tuple[Sequence[RouteParam], bool]:
@@ -309,29 +366,20 @@ def _route_param_for_security_scheme(
 
 
 def _parse_responses(
-    route: APIRoute, *, has_params: bool, is_streaming_json: bool
+    route: APIRoute,
+    *,
+    has_params: bool,
+    streaming_kind: RouteStreamingKind | None,
+    return_annotation: Any,  # noqa: ANN401
 ) -> tuple[Sequence[RouteResponse], HTTPStatus]:
     result = list[RouteResponse]()
 
     default_status = (
         HTTPStatus(route.status_code) if route.status_code else HTTPStatus.OK
     )
-    if route.response_field and route.response_field.field_info.annotation:
-        default_type = route.response_field.field_info.annotation
-    elif signature(route.endpoint).return_annotation is None:
-        default_type = type(None)
-    else:
-        default_type = type(Any)
-    default_type_origin = get_origin(default_type)
-    if (
-        is_streaming_json
-        and isinstance(default_type_origin, type)
-        and any(
-            issubclass(default_type_origin, iter_class)
-            for iter_class in (Iterator, Iterable, AsyncIterator, AsyncIterable)
-        )
-    ):
-        default_type = get_args(default_type)[0]
+    default_type = _resolve_default_type(
+        route, streaming_kind=streaming_kind, return_annotation=return_annotation
+    )
     result.append(
         RouteResponse(
             status=default_status,
@@ -353,6 +401,52 @@ def _parse_responses(
     result.sort(key=lambda response: response.status)
 
     return result, default_status
+
+
+def _resolve_default_type(
+    route: APIRoute,
+    *,
+    streaming_kind: RouteStreamingKind | None,
+    return_annotation: Any,  # noqa: ANN401
+) -> type:
+    if streaming_kind is RouteStreamingKind.RAW_BYTES:
+        return bytes
+    if streaming_kind is RouteStreamingKind.RAW_STR:
+        return str
+
+    is_direct_return = isinstance(return_annotation, type) and issubclass(
+        return_annotation, StreamingResponse
+    )
+
+    if route.response_field and route.response_field.field_info.annotation:
+        type_ = route.response_field.field_info.annotation
+    elif streaming_kind is not None and is_direct_return:
+        # Direct-return pattern with no `response_model`: there's no inner-type
+        # information available, so fall back to `Any`.
+        return type(Any)
+    elif streaming_kind is not None and return_annotation is not None:
+        type_ = return_annotation
+    elif signature(route.endpoint).return_annotation is None:
+        # Use raw `inspect.signature` here (not the `return_annotation` param):
+        # only the raw signature distinguishes `-> None` (literal `None`) from
+        # an unannotated endpoint (`Signature.empty`). FastAPI's
+        # `get_typed_return_annotation` collapses both to `None`.
+        return type(None)
+    else:
+        return type(Any)
+
+    if streaming_kind is not None:
+        inner = _unwrap_iterable(type_)
+        if inner is not None:
+            type_ = inner
+
+    if streaming_kind is RouteStreamingKind.SERVER_SENT_EVENTS and (
+        type_ is ServerSentEvent
+        or (isinstance(type_, type) and issubclass(type_, ServerSentEvent))
+    ):
+        return type(Any)
+
+    return type_
 
 
 def _check_duplicate_names(routes: Iterable[Route]) -> None:
