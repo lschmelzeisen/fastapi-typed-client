@@ -88,7 +88,7 @@ def test_get_imports_from_module(tmp_path: Path) -> None:
         (Annotated[int, None], "Annotated[int, None]"),
         pytest.param(
             Annotated[int, Field(gt=0)],
-            "Annotated[int, lel]",
+            "Annotated[int, Field(gt=0)]",
             marks=[
                 pytest.mark.xfail(reason="Pydantic FieldInfo is not supported yet."),
                 pytest.mark.filterwarnings("ignore:Pydantic FieldInfo.*"),
@@ -98,6 +98,32 @@ def test_get_imports_from_module(tmp_path: Path) -> None:
 )
 def test_get_usage_with_common_types(type_: Any, expected_usage: str) -> None:  # noqa: ANN401
     assert ImportRegistry().get_usage(type_) == expected_usage
+
+
+# Until `FieldInfo` rendering is implemented (see xfail above), `FieldInfo`
+# entries in `Annotated` metadata are dropped with a warning.
+@pytest.mark.parametrize(
+    ("type_", "expected_usage"),
+    [
+        (Annotated[int, Field(gt=0)], "int"),
+        (Annotated[int, Field(gt=0), Field(lt=10)], "int"),
+    ],
+)
+def test_get_usage_drops_pydantic_field_info(
+    type_: Any,  # noqa: ANN401
+    expected_usage: str,
+) -> None:
+    with pytest.warns(UserWarning, match="Pydantic FieldInfo"):
+        assert ImportRegistry().get_usage(type_) == expected_usage
+
+
+def test_get_usage_field_info_warning_mentions_expression() -> None:
+    with pytest.warns(UserWarning, match="Pydantic FieldInfo") as record:
+        ImportRegistry().get_usage(Annotated[int, Field(gt=0)])
+    assert len(record) == 1
+    message = str(record[0].message)
+    assert "metadata=[Gt(gt=0)]" in message
+    assert "Annotated[int, ...]" in message
 
 
 def assert_imports_load_expected_types(

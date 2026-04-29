@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Endpoints annotated `-> None` now produce a generated client method whose `data` is typed as `None` (and whose `model` is `type[None]`) instead of `Any`.
+- Unsupported Pydantic `FieldInfo` metadata in `Annotated` types now renders as the inner type (e.g. `Annotated[Cat | Dog, Field(discriminator="kind")]` becomes `Cat | Dog` instead of `Annotated[Cat | Dog, None]`). The accompanying warning now also names the dropped `FieldInfo` and inner type.
 
 ### Fixed
 

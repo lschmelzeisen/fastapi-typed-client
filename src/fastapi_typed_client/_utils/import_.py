@@ -5,6 +5,7 @@ from importlib import import_module
 from pathlib import Path
 from types import ModuleType, NoneType, UnionType
 from typing import (
+    Annotated,
     Any,
     Literal,
     NamedTuple,
@@ -46,6 +47,13 @@ def load_import(module: str, name: str | None) -> Any:  # noqa: ANN401
     for name_part in name.split("."):
         obj = getattr(obj, name_part)
     return obj
+
+
+def _is_pydantic_field_info(value: Any) -> bool:  # noqa: ANN401
+    # Scuffed isinstance() check because we don't want to import
+    # pydantic.fields.FieldInfo for users that don't need it.
+    cls = value.__class__
+    return cls.__module__ == "pydantic.fields" and cls.__name__ == "FieldInfo"
 
 
 def get_imports_from_module(module: ModuleType) -> Iterator[Import]:
@@ -243,19 +251,20 @@ class ImportRegistry:
             args = get_args(type_)
             if origin is Literal:
                 return f"{self.get_usage(origin)}[{', '.join(map(repr, args))}]"
+            if origin is Annotated:
+                return self._get_annotated_usage(origin, args)
             args_fmt = (self.get_usage(arg) for arg in args)
             if origin is Union or origin is UnionType:
                 return " | ".join(args_fmt)
             return f"{self.get_usage(origin)}[{', '.join(args_fmt)}]"
         if type_ is type(Any):
             type_ = Any
-        # Scuffed isinstance() check because we don't want to import
-        # pydantic.fields.FieldInfo for users that don't need it.
-        if (
-            type_.__class__.__module__ == "pydantic.fields"
-            and type_.__class__.__name__ == "FieldInfo"
-        ):
-            warn("Pydantic FieldInfo is not supported.", UserWarning, stacklevel=1)
+        if _is_pydantic_field_info(type_):
+            warn(
+                f"Pydantic FieldInfo is not supported: `{type_!r}`.",
+                UserWarning,
+                stacklevel=1,
+            )
             return "None"
         # type_ should be a qualified type by now.
         self.add_import_usage_for_qualified_type(
@@ -264,6 +273,23 @@ class ImportRegistry:
         if type_ not in self._types_used_outside_of_type_checking:
             return dq_str_repr(self._import_usages_by_type[type_].usage)
         return self._import_usages_by_type[type_].usage
+
+    def _get_annotated_usage(self, origin: Any, args: tuple[Any, ...]) -> str:  # noqa: ANN401
+        inner, *metadata = args
+        inner_str = self.get_usage(inner)
+        kept = [m for m in metadata if not _is_pydantic_field_info(m)]
+        if len(kept) != len(metadata):
+            for dropped in (m for m in metadata if _is_pydantic_field_info(m)):
+                warn(
+                    f"Pydantic FieldInfo is not supported; dropping `{dropped!r}` from "
+                    f"`Annotated[{inner_str}, ...]`.",
+                    UserWarning,
+                    stacklevel=1,
+                )
+        if not kept:
+            return inner_str
+        rendered = (inner_str, *map(self.get_usage, kept))
+        return f"{self.get_usage(origin)}[{', '.join(rendered)}]"
 
     def __call__(self, type_: Any, *, is_only_for_type_checking: bool = False) -> str:  # noqa: ANN401
         return self.get_usage(
