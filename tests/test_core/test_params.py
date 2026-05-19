@@ -243,10 +243,7 @@ def test_cookie_param_and_uuid_param(app: FastAPI, client_tester: ClientTester) 
         import pytest
 
         session_id = uuid4()
-        with (
-            pytest.warns(UserWarning, match="cookie parameter"),
-            pytest.warns(DeprecationWarning, match="per-request cookie"),
-        ):
+        with pytest.warns(DeprecationWarning, match="per-request cookie"):
             result = client.cookie_param(session_id=session_id)
         assert result.data == str(session_id)
         assert result.response.request.headers["cookie"] == f"session_id={session_id}"
@@ -263,10 +260,7 @@ async def test_cookie_param_and_uuid_param_async(
         import pytest
 
         session_id = uuid4()
-        with (
-            pytest.warns(UserWarning, match="cookie parameter"),
-            pytest.warns(DeprecationWarning, match="per-request cookie"),
-        ):
+        with pytest.warns(DeprecationWarning, match="per-request cookie"):
             result = await client.cookie_param(session_id=session_id)
         assert result.data == str(session_id)
         assert result.response.request.headers["cookie"] == f"session_id={session_id}"

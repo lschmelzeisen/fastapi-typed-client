@@ -330,10 +330,7 @@ def test_shared_cookie_param_across_sub_dependencies(
         import pytest
 
         param = uuid4()
-        with (
-            pytest.warns(UserWarning, match="cookie parameter"),
-            pytest.warns(DeprecationWarning, match="per-request cookie"),
-        ):
+        with pytest.warns(DeprecationWarning, match="per-request cookie"):
             result = client.cookie_two_deps(param=param)
         assert result.response.request.headers["cookie"] == f"param={param}"
         assert result.data == f"cookie-a-{param}|cookie-b-{param}"
@@ -354,10 +351,7 @@ async def test_shared_cookie_param_across_sub_dependencies_async(
         import pytest
 
         param = uuid4()
-        with (
-            pytest.warns(UserWarning, match="cookie parameter"),
-            pytest.warns(DeprecationWarning, match="per-request cookie"),
-        ):
+        with pytest.warns(DeprecationWarning, match="per-request cookie"):
             result = await client.cookie_two_deps(param=param)
         assert result.response.request.headers["cookie"] == f"param={param}"
         assert result.data == f"cookie-a-{param}|cookie-b-{param}"

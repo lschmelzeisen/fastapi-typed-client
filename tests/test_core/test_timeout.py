@@ -33,27 +33,27 @@ def test_timeout_passed_to_httpx_client(
     app: FastAPI, client_tester: ClientTester
 ) -> None:
     httpx_client_mock = Mock()
-    httpx_client_mock.request = Mock(side_effect=RuntimeError())
+    httpx_client_mock.send = Mock(side_effect=RuntimeError())
 
     def client_test(client: Any) -> None:  # noqa: ANN401
         client.foo(client_exts={"timeout": 10.0})
 
     with pytest.raises(RuntimeError):
         client_tester(app, client_test, httpx_client=httpx_client_mock)
-    httpx_client_mock.request.assert_called_once()
-    assert httpx_client_mock.request.call_args.kwargs["timeout"] == 10.0
+    httpx_client_mock.build_request.assert_called_once()
+    assert httpx_client_mock.build_request.call_args.kwargs["timeout"] == 10.0
 
 
 async def test_timeout_passed_to_httpx_client_async(
     app: FastAPI, async_client_tester: AsyncClientTester
 ) -> None:
     httpx_client_mock = Mock()
-    httpx_client_mock.request = Mock(side_effect=RuntimeError())
+    httpx_client_mock.send = Mock(side_effect=RuntimeError())
 
     async def client_test(client: Any) -> None:  # noqa: ANN401
         await client.foo(client_exts={"timeout": 10.0})
 
     with pytest.raises(RuntimeError):
         await async_client_tester(app, client_test, httpx_client=httpx_client_mock)
-    httpx_client_mock.request.assert_called_once()
-    assert httpx_client_mock.request.call_args.kwargs["timeout"] == 10.0
+    httpx_client_mock.build_request.assert_called_once()
+    assert httpx_client_mock.build_request.call_args.kwargs["timeout"] == 10.0

@@ -308,10 +308,7 @@ def test_api_key_cookie(
 
         import pytest
 
-        with (
-            pytest.warns(UserWarning, match="cookie parameter"),
-            pytest.warns(DeprecationWarning, match="per-request cookie"),
-        ):
+        with pytest.warns(DeprecationWarning, match="per-request cookie"):
             result = client.endpoint("abc123")
         assert result.response.request.headers["cookie"] == "session_id=abc123"
         assert result.data == "abc123"
@@ -333,10 +330,7 @@ async def test_api_key_cookie_async(
 
         import pytest
 
-        with (
-            pytest.warns(UserWarning, match="cookie parameter"),
-            pytest.warns(DeprecationWarning, match="per-request cookie"),
-        ):
+        with pytest.warns(DeprecationWarning, match="per-request cookie"):
             result = await client.endpoint("abc123")
         assert result.response.request.headers["cookie"] == "session_id=abc123"
         assert result.data == "abc123"
