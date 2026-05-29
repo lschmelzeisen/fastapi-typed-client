@@ -5,7 +5,7 @@ import pytest
 from fastapi import FastAPI
 
 from ..client_tester import AsyncClientTester, ClientTester
-from ..shared import TextAndNum
+from ..shared import TEXT_AND_NUM_DATA, TextAndNum
 
 
 @pytest.fixture
@@ -27,6 +27,17 @@ def app() -> FastAPI:
     @app.post("/qux")
     def qux() -> None:
         return None
+
+    # Plain `return [...]` / `return {...}` endpoints aren't generators, so FastAPI
+    # serves them as a single `application/json` document. Regression guard: concrete
+    # containers were once mis-detected as JSON-Lines streams.
+    @app.get("/items")
+    def items() -> list[TextAndNum]:
+        return list(TEXT_AND_NUM_DATA)
+
+    @app.get("/mapping")
+    def mapping() -> dict[str, TextAndNum]:
+        return {item.text: item for item in TEXT_AND_NUM_DATA}
 
     return app
 
@@ -217,5 +228,41 @@ async def test_none_return_default_status_result_async(
         assert result.data is None
         assert result.model is type(None)
         assert result.response.url.path == "/qux"
+
+    await async_client_tester(app, client_test)
+
+
+def test_list_return(app: FastAPI, client_tester: ClientTester) -> None:
+    def client_test(client: Any) -> None:  # noqa: ANN401
+        from typing import assert_type
+
+        from ..shared import TEXT_AND_NUM_DATA, TextAndNum
+
+        result = client.items()
+        assert_type(result.data, list[TextAndNum])  # type: ignore[client_tester_only]
+        assert result.data == list(TEXT_AND_NUM_DATA)
+
+        result_mapping = client.mapping()
+        assert_type(result_mapping.data, dict[str, TextAndNum])  # type: ignore[client_tester_only]
+        assert result_mapping.data == {item.text: item for item in TEXT_AND_NUM_DATA}
+
+    client_tester(app, client_test)
+
+
+async def test_list_return_async(
+    app: FastAPI, async_client_tester: AsyncClientTester
+) -> None:
+    async def client_test(client: Any) -> None:  # noqa: ANN401
+        from typing import assert_type
+
+        from ..shared import TEXT_AND_NUM_DATA, TextAndNum
+
+        result = await client.items()
+        assert_type(result.data, list[TextAndNum])  # type: ignore[client_tester_only]
+        assert result.data == list(TEXT_AND_NUM_DATA)
+
+        result_mapping = await client.mapping()
+        assert_type(result_mapping.data, dict[str, TextAndNum])  # type: ignore[client_tester_only]
+        assert result_mapping.data == {item.text: item for item in TEXT_AND_NUM_DATA}
 
     await async_client_tester(app, client_test)

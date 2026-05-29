@@ -1,8 +1,6 @@
 from collections.abc import (
     AsyncIterable,
-    AsyncIterator,
     Iterable,
-    Iterator,
     Mapping,
     Sequence,
 )
@@ -19,7 +17,7 @@ from fastapi.dependencies.utils import (
     get_flat_dependant,
     get_typed_return_annotation,
 )
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute, BaseRoute
 from fastapi.security import (
     APIKeyCookie,
@@ -32,7 +30,7 @@ from fastapi.security import (
     OpenIdConnect,
 )
 from fastapi.security.base import SecurityBase
-from fastapi.sse import EventSourceResponse, ServerSentEvent
+from fastapi.sse import EventSourceResponse
 
 from ._utils import to_snake_case
 from .client import FastAPIClientHTTPValidationError
@@ -44,8 +42,6 @@ _DISALLOWED_PARAM_NAMES = {
     "HTTPMethod",
     "HTTPStatus",
 }
-
-_ITERABLE_CLASSES = (Iterator, Iterable, AsyncIterator, AsyncIterable)
 
 
 class RouteParamKind(Enum):
@@ -126,7 +122,6 @@ def _parse_route(route: APIRoute) -> Route:
             f"Route {route.name} has unsupported path format `{route.path_format}`."
         )
 
-    # TODO: would it be better to use route.response_class here?
     return_annotation = get_typed_return_annotation(route.endpoint)
     streaming_kind = _detect_streaming_kind(route, return_annotation)
 
@@ -135,7 +130,6 @@ def _parse_route(route: APIRoute) -> Route:
         route,
         has_params=bool(params),
         streaming_kind=streaming_kind,
-        return_annotation=return_annotation,
     )
 
     return Route(
@@ -154,14 +148,16 @@ def _detect_streaming_kind(
     route: APIRoute,
     return_annotation: Any,  # noqa: ANN401
 ) -> RouteStreamingKind | None:
-    response_class: type[Response] | None = (
-        None
-        if isinstance(route.response_class, DefaultPlaceholder)
-        else route.response_class
-    )
+    # Mirror FastAPI's own flags, which stream JSON-Lines / SSE only for actual
+    # generator endpoints.
+    if route.is_sse_stream:
+        return RouteStreamingKind.SERVER_SENT_EVENTS
+    if route.is_json_stream:
+        return RouteStreamingKind.JSON_LINES
 
-    # Direct-return pattern: the return annotation is a `Response` subclass that the
-    # endpoint constructs and returns itself.
+    # Direct-return pattern: the endpoint constructs and returns a `Response` subclass
+    # itself. These aren't generator functions, so FastAPI sets no flag for them and we
+    # read the return annotation directly.
     if isinstance(return_annotation, type):
         if issubclass(return_annotation, EventSourceResponse):
             return RouteStreamingKind.SERVER_SENT_EVENTS
@@ -171,25 +167,27 @@ def _detect_streaming_kind(
                 return RouteStreamingKind.JSON_LINES
             return RouteStreamingKind.RAW_BYTES
 
-    inner = _unwrap_iterable(return_annotation)
-    if response_class is not None:
-        if issubclass(response_class, EventSourceResponse):
-            return RouteStreamingKind.SERVER_SENT_EVENTS
-
-        if issubclass(response_class, StreamingResponse):
-            if inner is str:
-                return RouteStreamingKind.RAW_STR
-            return RouteStreamingKind.RAW_BYTES
-    elif inner is not None and inner not in (bytes, str):
-        return RouteStreamingKind.JSON_LINES
+    # Explicit `response_class=StreamingResponse` on a generator endpoint streams raw
+    # bytes/str. FastAPI sets neither flag and computes no item type for these, so the
+    # yielded annotation is the only signal for telling `str` from `bytes`.
+    if not isinstance(route.response_class, DefaultPlaceholder) and issubclass(
+        route.response_class, StreamingResponse
+    ):
+        if _unwrap_iterable(return_annotation) is str:
+            return RouteStreamingKind.RAW_STR
+        return RouteStreamingKind.RAW_BYTES
 
     return None
 
 
 def _unwrap_iterable(type_: Any) -> Any:  # noqa: ANN401
+    # Item type of an iterable/container annotation, e.g. `Sequence[Item]` -> `Item`.
+    # The `issubclass` match is intentionally broad (also covers `list` / `dict` /
+    # `set`) so it unwraps container `response_model`s. FastAPI's `get_stream_item_type`
+    # can't replace it: its origin allowlist excludes `Sequence` / `list`.
     origin = get_origin(type_)
-    if isinstance(origin, type) and any(
-        issubclass(origin, c) for c in _ITERABLE_CLASSES
+    if isinstance(origin, type) and (
+        issubclass(origin, Iterable) or issubclass(origin, AsyncIterable)
     ):
         args = get_args(type_)
         if args:
@@ -370,16 +368,13 @@ def _parse_responses(
     *,
     has_params: bool,
     streaming_kind: RouteStreamingKind | None,
-    return_annotation: Any,  # noqa: ANN401
 ) -> tuple[Sequence[RouteResponse], HTTPStatus]:
     result = list[RouteResponse]()
 
     default_status = (
         HTTPStatus(route.status_code) if route.status_code else HTTPStatus.OK
     )
-    default_type = _resolve_default_type(
-        route, streaming_kind=streaming_kind, return_annotation=return_annotation
-    )
+    default_type = _resolve_default_type(route, streaming_kind=streaming_kind)
     result.append(
         RouteResponse(
             status=default_status,
@@ -407,46 +402,37 @@ def _resolve_default_type(
     route: APIRoute,
     *,
     streaming_kind: RouteStreamingKind | None,
-    return_annotation: Any,  # noqa: ANN401
 ) -> type:
     if streaming_kind is RouteStreamingKind.RAW_BYTES:
         return bytes
     if streaming_kind is RouteStreamingKind.RAW_STR:
         return str
 
-    is_direct_return = isinstance(return_annotation, type) and issubclass(
-        return_annotation, StreamingResponse
-    )
+    # FastAPI fills `stream_item_field` with the unwrapped item type (`ServerSentEvent`
+    # wrapper dropped to `None`) only for generators, so gate on the flags: direct-return
+    # JSONL/SSE streams carry their type in `response_field` and fall through below.
+    if route.is_json_stream or route.is_sse_stream:
+        stream_item_field = route.stream_item_field
+        if stream_item_field and stream_item_field.field_info.annotation:
+            return stream_item_field.field_info.annotation
+        return type(Any)
 
     if route.response_field and route.response_field.field_info.annotation:
         type_ = route.response_field.field_info.annotation
-    elif streaming_kind is not None and is_direct_return:
-        # Direct-return pattern with no `response_model`: there's no inner-type
-        # information available, so fall back to `Any`.
-        return type(Any)
-    elif streaming_kind is not None and return_annotation is not None:
-        type_ = return_annotation
-    elif signature(route.endpoint).return_annotation is None:
-        # Use raw `inspect.signature` here (not the `return_annotation` param):
-        # only the raw signature distinguishes `-> None` (literal `None`) from
-        # an unannotated endpoint (`Signature.empty`). FastAPI's
-        # `get_typed_return_annotation` collapses both to `None`.
-        return type(None)
-    else:
-        return type(Any)
+        # Direct-return JSONL/SSE stream with a container `response_model` (e.g.
+        # `Sequence[T]`): unwrap to the per-item type.
+        if streaming_kind is not None:
+            type_ = _unwrap_iterable(type_) or type_
+        return type_
 
+    # No `response_model`. A direct-return stream has no inner-type info → `Any`.
     if streaming_kind is not None:
-        inner = _unwrap_iterable(type_)
-        if inner is not None:
-            type_ = inner
-
-    if streaming_kind is RouteStreamingKind.SERVER_SENT_EVENTS and (
-        type_ is ServerSentEvent
-        or (isinstance(type_, type) and issubclass(type_, ServerSentEvent))
-    ):
         return type(Any)
-
-    return type_
+    # Raw `inspect.signature` distinguishes `-> None` from an unannotated endpoint
+    # (`Signature.empty`); `get_typed_return_annotation` collapses both to `None`.
+    if signature(route.endpoint).return_annotation is None:
+        return type(None)
+    return type(Any)
 
 
 def _check_duplicate_names(routes: Iterable[Route]) -> None:
