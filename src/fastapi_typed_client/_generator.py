@@ -7,7 +7,8 @@ from http import HTTPMethod, HTTPStatus
 from importlib.util import find_spec
 from inspect import getsource
 from sys import stdlib_module_names
-from typing import Any, Literal, NamedTuple, overload
+from types import NoneType
+from typing import Any, Literal, NamedTuple, get_args, get_origin, overload
 from warnings import warn
 
 from ._parser import (
@@ -27,6 +28,7 @@ from .client import (
     FastAPIClientAsyncBase,
     FastAPIClientBase,
     FastAPIClientExtensions,
+    FastAPIClientFile,
     FastAPIClientHTTPValidationError,
     FastAPIClientNotDefaultStatusError,
     FastAPIClientResult,
@@ -44,6 +46,7 @@ class _Identifiers(NamedTuple):
     not_default_status_error: str
     security_param: str
     sse: str
+    file: str
     not_required: str
     base_class: str
     client_class: str
@@ -57,6 +60,7 @@ class _Identifiers(NamedTuple):
             FastAPIClientNotDefaultStatusError.__name__: self.not_default_status_error,
             FastAPIClientSecurityParam.__name__: self.security_param,
             FastAPIClientSSE.__name__: self.sse,
+            FastAPIClientFile.__name__: self.file,
             "FASTAPI_CLIENT_NOT_REQUIRED": self.not_required,
             FastAPIClientBase.__name__: self.base_class,
             FastAPIClientAsyncBase.__name__: self.base_class,
@@ -103,6 +107,7 @@ class ClientCodeGenerator:
                 not_default_status_error=FastAPIClientNotDefaultStatusError.__name__,
                 security_param=FastAPIClientSecurityParam.__name__,
                 sse=FastAPIClientSSE.__name__,
+                file=FastAPIClientFile.__name__,
                 not_required="FASTAPI_CLIENT_NOT_REQUIRED",
                 base_class=self._base_class.__name__,
                 client_class=self._title,
@@ -115,6 +120,7 @@ class ClientCodeGenerator:
             not_default_status_error=f"{self._title}NotDefaultStatusError",
             security_param=f"{self._title}SecurityParam",
             sse=f"{self._title}SSE",
+            file=f"{self._title}File",
             not_required=(
                 to_constant_case(self._title).replace("FAST_API", "FASTAPI")
                 + "_NOT_REQUIRED"
@@ -186,11 +192,25 @@ class ClientCodeGenerator:
     def _get_route_specific_params_code(self, params: Sequence[RouteParam]) -> str:
         code = ""
         for param in params:
-            code += f"{param.name}: {self._impr(param.type_)}"
+            if param.kind is RouteParamKind.FILE:
+                type_code = self._render_file_param_type(param.type_)
+            else:
+                type_code = self._impr(param.type_)
+            code += f"{param.name}: {type_code}"
             if not param.required:
                 code += f" = {self._idents.not_required}"
             code += ",\n"
         return code
+
+    def _render_file_param_type(self, type_: Any) -> str:  # noqa: ANN401
+        args = get_args(type_)
+        if NoneType in args:
+            inner = next(a for a in args if a is not NoneType)
+            return f"{self._render_file_param_type(inner)} | None"
+        origin = get_origin(type_)
+        if isinstance(origin, type) and issubclass(origin, Sequence):
+            return f"list[{self._idents.file}]"
+        return self._idents.file
 
     def _get_route_generic_params_code(
         self, raise_if_not_default_status: bool | None
@@ -349,14 +369,22 @@ class _BoilerplateCodeGenerator:
             route.streaming_kind is RouteStreamingKind.SERVER_SENT_EVENTS
             for route in routes
         )
+        has_file_params = any(
+            param.kind is RouteParamKind.FILE
+            for route in routes
+            for param in route.params
+        )
         if import_client_base:
             return self._generate_with_import_client_base(
                 has_not_required_params,
                 has_validation_errors,
                 has_security_params,
                 has_sse,
+                has_file_params,
             )
-        return self._generate_without_import_client_base(has_validation_errors)
+        return self._generate_without_import_client_base(
+            has_validation_errors, has_file_params
+        )
 
     def _generate_with_import_client_base(
         self,
@@ -364,6 +392,7 @@ class _BoilerplateCodeGenerator:
         has_validation_errors: bool,
         has_security_params: bool,
         has_sse: bool,
+        has_file_params: bool,
     ) -> str:
         # Manually write imports here so that modules are imported from specific
         # submodule instead of top-level module.
@@ -374,6 +403,7 @@ class _BoilerplateCodeGenerator:
             self._idents.http_validation_error if has_validation_errors else None,
             self._idents.security_param if has_security_params else None,
             self._idents.sse if has_sse else None,
+            self._idents.file if has_file_params else None,
             self._idents.not_required if has_not_required_params else None,
         ]:
             if import_name:
@@ -382,7 +412,9 @@ class _BoilerplateCodeGenerator:
                 )
         return f"class {self._idents.client_class}({self._impr(self._base_class)}):"
 
-    def _generate_without_import_client_base(self, has_validation_errors: bool) -> str:
+    def _generate_without_import_client_base(
+        self, has_validation_errors: bool, has_file_params: bool
+    ) -> str:
         # Adding Self to one of the *_IMPORTS constant makes type checking fail.
         self._impr.add_import(Import(module="typing", name="Self"))
 
@@ -393,6 +425,13 @@ class _BoilerplateCodeGenerator:
         # Manually specify where warn is imported from, because otherwise it resolves to
         # `from _warnings import warn`.
         self._impr.add_import_for_type(Import(module="warnings", name="warn"), warn)
+
+        if has_file_params:
+            # Imports for the inlined `FastAPIClientFile` alias. `FileTypes` is a
+            # `Union`, so it must be imported by name (passing it through the import
+            # registry's type-usage path would expand it into its members).
+            self._impr.add_import(Import(module="fastapi", name="UploadFile"))
+            self._impr.add_import(Import(module="httpx._types", name="FileTypes"))
 
         for type_ in (
             _IMPORTS
@@ -422,6 +461,11 @@ class _BoilerplateCodeGenerator:
 
         sources = [
             "# TEST_MARKER_BEFORE_BOILERPLATE\n" if self._add_test_markers else None,
+            (
+                f"type {FastAPIClientFile.__name__} = UploadFile | FileTypes\n"
+                if has_file_params
+                else None
+            ),
             getsource(FastAPIClientExtensions),
             getsource(FastAPIClientResult),
             getsource(FastAPIClientValidationError) if has_validation_errors else None,

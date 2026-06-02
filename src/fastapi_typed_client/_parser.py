@@ -17,6 +17,7 @@ from fastapi.dependencies.utils import (
     get_flat_dependant,
     get_typed_return_annotation,
 )
+from fastapi.params import Body, File, Form
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute, BaseRoute
 from fastapi.security import (
@@ -50,6 +51,8 @@ class RouteParamKind(Enum):
     HEADER = auto()
     COOKIE = auto()
     BODY = auto()
+    FILE = auto()
+    FORM = auto()
     SECURITY = auto()
 
 
@@ -213,13 +216,21 @@ def _parse_params(route: APIRoute) -> tuple[Sequence[RouteParam], bool]:
         kind: _get_flat_fields_from_params(fields)
         for kind, fields in fields_params_map.items()
     }
-    fields_params_map[RouteParamKind.BODY] = dependant.body_params
+    fields_params_map.update(_partition_body_fields(dependant.body_params))
 
     route_params_map: dict[RouteParamKind, Sequence[RouteParam]] = {
         kind: _fields_to_route_params(kind, fields, incompatible_names)
         for kind, fields in fields_params_map.items()
     }
     route_params_map[RouteParamKind.SECURITY] = _parse_security_params(route, dependant)
+
+    if (
+        route_params_map[RouteParamKind.FILE] or route_params_map[RouteParamKind.FORM]
+    ) and route_params_map[RouteParamKind.BODY]:
+        raise RuntimeError(
+            f"Route {route.name} mixes file/form parameters with a JSON body "
+            "parameter, which cannot be encoded in a single request."
+        )
 
     result = list[RouteParam]()
     for params in route_params_map.values():
@@ -253,6 +264,31 @@ def _parse_params(route: APIRoute) -> tuple[Sequence[RouteParam], bool]:
     is_body_embedded = route._embed_body_fields  # noqa: SLF001
 
     return result, is_body_embedded
+
+
+def _partition_body_fields(
+    body_params: Sequence[ModelField],
+) -> dict[RouteParamKind, list[ModelField]]:
+    # Split body params by their `FieldInfo` subclass into file uploads, form fields,
+    # and JSON body. Order matters: `File` is a `Form` is a `Body`.
+    partitioned: dict[RouteParamKind, list[ModelField]] = {
+        RouteParamKind.BODY: [],
+        RouteParamKind.FILE: [],
+        RouteParamKind.FORM: [],
+    }
+    for field in body_params:
+        if isinstance(field.field_info, File):
+            partitioned[RouteParamKind.FILE].append(field)
+        elif isinstance(field.field_info, Form):
+            partitioned[RouteParamKind.FORM].append(field)
+        elif isinstance(field.field_info, Body):
+            partitioned[RouteParamKind.BODY].append(field)
+        else:
+            raise RuntimeError(
+                f"Body parameter `{field.name}` has unexpected field info type "
+                f"`{type(field.field_info).__name__}`; expected a `fastapi.params.Body`."
+            )
+    return partitioned
 
 
 def _fields_to_route_params(

@@ -1,10 +1,12 @@
 from typing import Annotated
 
 import pytest
-from fastapi import Depends, FastAPI, Header, Query
+from fastapi import Body, Depends, FastAPI, Form, Header, Query, UploadFile
 from fastapi.routing import APIRoute
 
 from fastapi_typed_client import generate_fastapi_typed_client
+
+from ..shared import TextAndNum
 
 pytestmark = pytest.mark.usefixtures("tmp_cwd")
 
@@ -102,4 +104,26 @@ def test_shared_param_with_different_aliases() -> None:
         return f"{a}-{b}"
 
     with pytest.raises(RuntimeError):
+        generate_fastapi_typed_client(app)
+
+
+def test_route_mixing_file_and_json_body() -> None:
+    app = FastAPI()
+
+    @app.post("/mix")
+    def mix(file: UploadFile, meta: Annotated[TextAndNum, Body()]) -> None:
+        pass
+
+    with pytest.raises(RuntimeError, match="file/form"):
+        generate_fastapi_typed_client(app)
+
+
+def test_route_mixing_form_and_json_body() -> None:
+    app = FastAPI()
+
+    @app.post("/mix")
+    def mix(name: Annotated[str, Form()], meta: Annotated[TextAndNum, Body()]) -> None:
+        pass
+
+    with pytest.raises(RuntimeError, match="file/form"):
         generate_fastapi_typed_client(app)

@@ -10,6 +10,7 @@ from fastapi.security import (
     HTTPBasicCredentials,
     HTTPBearer,
     OAuth2PasswordBearer,
+    OAuth2PasswordRequestForm,
     OpenIdConnect,
 )
 from fastapi.security.http import HTTPAuthorizationCredentials
@@ -83,6 +84,24 @@ def app_oauth2_password_bearer() -> FastAPI:
         token: Annotated[str, Depends(OAuth2PasswordBearer(tokenUrl="/token"))],
     ) -> str:
         return token
+
+    return app
+
+
+@pytest.fixture
+def app_oauth2_password_request_form() -> FastAPI:
+    app = FastAPI()
+
+    @app.post("/token")
+    def endpoint(
+        form: Annotated[OAuth2PasswordRequestForm, Depends()],
+    ) -> dict[str, Any]:
+        return {
+            "username": form.username,
+            "password": form.password,
+            "scopes": form.scopes,
+            "grant_type": form.grant_type,
+        }
 
     return app
 
@@ -415,6 +434,86 @@ async def test_oauth2_password_bearer_async(
 
     await async_client_tester(
         app_oauth2_password_bearer,
+        client_test,
+        assert_format_of_generated_code=False,
+    )
+
+
+def test_oauth2_password_request_form(
+    app_oauth2_password_request_form: FastAPI, client_tester: ClientTester
+) -> None:
+    def client_test(client: Any) -> None:  # noqa: ANN401
+        from httpx import QueryParams
+
+        password = "s3cret"  # noqa: S105
+        result = client.endpoint(username="alice", password=password)
+        assert (
+            result.response.request.headers["content-type"]
+            == "application/x-www-form-urlencoded"
+        )
+        assert dict(QueryParams(result.response.request.content)) == {
+            "username": "alice",
+            "password": password,
+        }
+        assert result.data == {
+            "username": "alice",
+            "password": password,
+            "scopes": [],
+            "grant_type": None,
+        }
+
+        result2 = client.endpoint(
+            username="bob", password=password, grant_type="password", scope="read write"
+        )
+        assert result2.data == {
+            "username": "bob",
+            "password": password,
+            "scopes": ["read", "write"],
+            "grant_type": "password",
+        }
+
+    client_tester(
+        app_oauth2_password_request_form,
+        client_test,
+        assert_format_of_generated_code=False,
+    )
+
+
+async def test_oauth2_password_request_form_async(
+    app_oauth2_password_request_form: FastAPI, async_client_tester: AsyncClientTester
+) -> None:
+    async def client_test(client: Any) -> None:  # noqa: ANN401
+        from httpx import QueryParams
+
+        password = "s3cret"  # noqa: S105
+        result = await client.endpoint(username="alice", password=password)
+        assert (
+            result.response.request.headers["content-type"]
+            == "application/x-www-form-urlencoded"
+        )
+        assert dict(QueryParams(result.response.request.content)) == {
+            "username": "alice",
+            "password": password,
+        }
+        assert result.data == {
+            "username": "alice",
+            "password": password,
+            "scopes": [],
+            "grant_type": None,
+        }
+
+        result2 = await client.endpoint(
+            username="bob", password=password, grant_type="password", scope="read write"
+        )
+        assert result2.data == {
+            "username": "bob",
+            "password": password,
+            "scopes": ["read", "write"],
+            "grant_type": "password",
+        }
+
+    await async_client_tester(
+        app_oauth2_password_request_form,
         client_test,
         assert_format_of_generated_code=False,
     )
