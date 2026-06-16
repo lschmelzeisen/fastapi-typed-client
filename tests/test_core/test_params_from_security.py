@@ -443,7 +443,7 @@ def test_oauth2_password_request_form(
     app_oauth2_password_request_form: FastAPI, client_tester: ClientTester
 ) -> None:
     def client_test(client: Any) -> None:  # noqa: ANN401
-        from httpx import QueryParams
+        from httpx2 import QueryParams
 
         password = "s3cret"  # noqa: S105
         result = client.endpoint(username="alice", password=password)
@@ -483,7 +483,7 @@ async def test_oauth2_password_request_form_async(
     app_oauth2_password_request_form: FastAPI, async_client_tester: AsyncClientTester
 ) -> None:
     async def client_test(client: Any) -> None:  # noqa: ANN401
-        from httpx import QueryParams
+        from httpx2 import QueryParams
 
         password = "s3cret"  # noqa: S105
         result = await client.endpoint(username="alice", password=password)

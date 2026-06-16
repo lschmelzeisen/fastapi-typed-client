@@ -1,6 +1,6 @@
 """Streaming-endpoint tests run against a real loopback uvicorn server.
 
-The sibling `test_stream_*.py` files use `httpx.ASGITransport`, which
+The sibling `test_stream_*.py` files use `httpx2.ASGITransport`, which
 coalesces the response body — a client that buffered the whole body would
 pass them. These tests use a real socket where chunk boundaries are real.
 
@@ -22,7 +22,7 @@ from anyio.from_thread import start_blocking_portal
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from fastapi.sse import EventSourceResponse
-from httpx import AsyncClient, Client
+from httpx2 import AsyncClient, Client
 
 from ..client_tester import AsyncClientTester, ClientTester
 from ..shared import TextAndNum

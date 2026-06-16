@@ -51,7 +51,7 @@ def test_stream_raw(app: FastAPI, client_tester: ClientTester) -> None:
 
         # Note: the endpoint's chunk boundaries cannot be observed in this test
         # because ASGITransport (used by `TestClient`) coalesces the streamed
-        # body into a single buffer before handing it to httpx. So we can only
+        # body into a single buffer before handing it to httpx2. So we can only
         # assert on the concatenated content, not the individual chunks.
         result_bytes_sync = client.bytes_sync()
         assert_type(result_bytes_sync.data, Iterator[bytes])  # type: ignore[client_tester_only]

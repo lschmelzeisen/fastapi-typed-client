@@ -50,7 +50,7 @@ def test_normal_result(
         from http import HTTPStatus
         from typing import Literal, assert_type
 
-        from httpx import Response
+        from httpx2 import Response
 
         from ..shared import TextAndNum
 
@@ -76,7 +76,7 @@ async def test_normal_result_async(
         from http import HTTPStatus
         from typing import Literal, assert_type
 
-        from httpx import Response
+        from httpx2 import Response
 
         from ..shared import TextAndNum
 
@@ -99,7 +99,7 @@ def test_result_with_changed_status(app: FastAPI, client_tester: ClientTester) -
         from http import HTTPStatus
         from typing import Literal, assert_type
 
-        from httpx import Response
+        from httpx2 import Response
 
         from ..shared import TextAndNum
 
@@ -124,7 +124,7 @@ async def test_result_with_changed_status_async(
         from http import HTTPStatus
         from typing import Literal, assert_type
 
-        from httpx import Response
+        from httpx2 import Response
 
         from ..shared import TextAndNum
 
@@ -147,7 +147,7 @@ def test_no_content_result(app: FastAPI, client_tester: ClientTester) -> None:
         from http import HTTPStatus
         from typing import Literal, assert_type
 
-        from httpx import Response
+        from httpx2 import Response
 
         result = client.baz()
 
@@ -170,7 +170,7 @@ async def test_no_content_result_async(
         from http import HTTPStatus
         from typing import Literal, assert_type
 
-        from httpx import Response
+        from httpx2 import Response
 
         result = await client.baz()
 
@@ -193,7 +193,7 @@ def test_none_return_default_status_result(
         from http import HTTPStatus
         from typing import Literal, assert_type
 
-        from httpx import Response
+        from httpx2 import Response
 
         result = client.qux()
 
@@ -216,7 +216,7 @@ async def test_none_return_default_status_result_async(
         from http import HTTPStatus
         from typing import Literal, assert_type
 
-        from httpx import Response
+        from httpx2 import Response
 
         result = await client.qux()
 

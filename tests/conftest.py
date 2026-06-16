@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from fastapi import FastAPI
-from httpx import AsyncClient, Client
+from httpx2 import AsyncClient, Client
 from pyrefly.__main__ import get_pyrefly_bin
 from rich.console import Console
 from ruff.__main__ import find_ruff_bin

@@ -69,7 +69,7 @@ def test_file_uploads(app: FastAPI, client_tester: ClientTester) -> None:
         from fastapi import UploadFile
 
         # The `FastAPIClientFile` alias accepts `UploadFile`, raw bytes, file-like
-        # objects, and httpx `(filename, content, content_type)` tuples alike.
+        # objects, and httpx2 `(filename, content, content_type)` tuples alike.
         result = client.single(UploadFile(filename="a.txt", file=BytesIO(b"hi")))
         assert result.response.request.headers["content-type"].startswith(
             "multipart/form-data"
@@ -109,7 +109,7 @@ async def test_file_uploads_async(
         from fastapi import UploadFile
 
         # The `FastAPIClientFile` alias accepts `UploadFile`, raw bytes, file-like
-        # objects, and httpx `(filename, content, content_type)` tuples alike.
+        # objects, and httpx2 `(filename, content, content_type)` tuples alike.
         result = await client.single(UploadFile(filename="a.txt", file=BytesIO(b"hi")))
         assert result.response.request.headers["content-type"].startswith(
             "multipart/form-data"
@@ -141,7 +141,7 @@ async def test_file_uploads_async(
 
 def test_form_fields(app: FastAPI, client_tester: ClientTester) -> None:
     def client_test(client: Any) -> None:  # noqa: ANN401
-        from httpx import QueryParams
+        from httpx2 import QueryParams
 
         from ..shared import TextAndNum
 
@@ -171,7 +171,7 @@ async def test_form_fields_async(
     app: FastAPI, async_client_tester: AsyncClientTester
 ) -> None:
     async def client_test(client: Any) -> None:  # noqa: ANN401
-        from httpx import QueryParams
+        from httpx2 import QueryParams
 
         from ..shared import TextAndNum
 

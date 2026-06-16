@@ -8,7 +8,7 @@ from warnings import warn
 from fastapi import FastAPI, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.sse import ServerSentEvent
-from httpx import (
+from httpx2 import (
     USE_CLIENT_DEFAULT,
     ASGITransport,
     AsyncClient,
@@ -16,7 +16,7 @@ from httpx import (
     Response,
     Timeout,
 )
-from httpx._types import FileTypes
+from httpx2._types import FileTypes
 from pydantic import BaseModel, TypeAdapter
 
 # List all imports of this file for usage by _generator.py here.
@@ -149,7 +149,7 @@ class FastAPIClientBase:
                     # `UploadFile`-like; duck-typed so we need not import it here.
                     result.append((name, (v.filename, v.file, v.content_type)))
                 else:
-                    # `bytes` / `str` / `IO[bytes]` / httpx `(name, content[, type])`.
+                    # `bytes` / `str` / `IO[bytes]` / httpx2 `(name, content[, type])`.
                     result.append((name, v))
         return result or None
 
@@ -169,7 +169,7 @@ class FastAPIClientBase:
                 # (only flat models round-trip; nested dicts don't url-encode).
                 form.update(encoded)
             else:
-                # Scalars get stringified by httpx; lists become repeated fields.
+                # Scalars get stringified by httpx2; lists become repeated fields.
                 form[name] = encoded
         return form or None
 
@@ -248,7 +248,7 @@ class FastAPIClientBase:
         queries = self._filter_and_encode_params(query_params) or {}
         self._apply_security_params(security_params, headers, cookies, queries)
         if cookies:
-            # Mirror httpx's per-request-cookies DeprecationWarning ourselves
+            # Mirror httpx2's per-request-cookies DeprecationWarning ourselves
             # (we bypass `Client.request()` via `build_request` + `send`).
             warn(
                 "Setting per-request cookie parameters is deprecated because cookie"
@@ -480,7 +480,7 @@ class FastAPIClientAsyncBase:
                     # `UploadFile`-like; duck-typed so we need not import it here.
                     result.append((name, (v.filename, v.file, v.content_type)))
                 else:
-                    # `bytes` / `str` / `IO[bytes]` / httpx `(name, content[, type])`.
+                    # `bytes` / `str` / `IO[bytes]` / httpx2 `(name, content[, type])`.
                     result.append((name, v))
         return result or None
 
@@ -500,7 +500,7 @@ class FastAPIClientAsyncBase:
                 # (only flat models round-trip; nested dicts don't url-encode).
                 form.update(encoded)
             else:
-                # Scalars get stringified by httpx; lists become repeated fields.
+                # Scalars get stringified by httpx2; lists become repeated fields.
                 form[name] = encoded
         return form or None
 
@@ -579,7 +579,7 @@ class FastAPIClientAsyncBase:
         queries = self._filter_and_encode_params(query_params) or {}
         self._apply_security_params(security_params, headers, cookies, queries)
         if cookies:
-            # Mirror httpx's per-request-cookies DeprecationWarning ourselves
+            # Mirror httpx2's per-request-cookies DeprecationWarning ourselves
             # (we bypass `Client.request()` via `build_request` + `send`).
             warn(
                 "Setting per-request cookie parameters is deprecated because cookie"

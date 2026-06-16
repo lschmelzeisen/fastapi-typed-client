@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Endpoints annotated `-> None` now produce a generated client method whose `data` is typed as `None` (and whose `model` is `type[None]`) instead of `Any`.
 - Unsupported Pydantic `FieldInfo` metadata in `Annotated` types now renders as the inner type (e.g. `Annotated[Cat | Dog, Field(discriminator="kind")]` becomes `Cat | Dog` instead of `Annotated[Cat | Dog, None]`). The accompanying warning now also names the dropped `FieldInfo` and inner type.
+- Replace the `httpx` dependency with [`httpx2`](https://pypi.org/project/httpx2/), Pydantic's maintained continuation of `httpx`, in line with Starlette 1.2+ deprecating plain `httpx` in its test client. Generated clients now import from `httpx2` instead of `httpx`, so consumers of a generated client need `httpx2` installed.
+- Update minimum required version of supported dependencies (`fastapi>=0.137.1`, `pydantic>=2.13.4`, `typer>=0.26.7`). Older dependency versions might work, but are not tested against.
 
 ### Fixed
 

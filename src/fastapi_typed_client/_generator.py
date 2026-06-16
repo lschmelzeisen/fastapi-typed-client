@@ -420,7 +420,7 @@ class _BoilerplateCodeGenerator:
 
         # Can't programmatically look up import location of constants, so have to
         # hard-code those here.
-        self._impr.add_import(Import(module="httpx", name="USE_CLIENT_DEFAULT"))
+        self._impr.add_import(Import(module="httpx2", name="USE_CLIENT_DEFAULT"))
 
         # Manually specify where warn is imported from, because otherwise it resolves to
         # `from _warnings import warn`.
@@ -431,7 +431,7 @@ class _BoilerplateCodeGenerator:
             # `Union`, so it must be imported by name (passing it through the import
             # registry's type-usage path would expand it into its members).
             self._impr.add_import(Import(module="fastapi", name="UploadFile"))
-            self._impr.add_import(Import(module="httpx._types", name="FileTypes"))
+            self._impr.add_import(Import(module="httpx2._types", name="FileTypes"))
 
         for type_ in (
             _IMPORTS

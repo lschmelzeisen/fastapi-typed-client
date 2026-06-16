@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, Protocol
 
 from fastapi import FastAPI
-from httpx import AsyncClient, Client
+from httpx2 import AsyncClient, Client
 
 type ClientTesterFunc = Callable[[Any], None]
 type AsyncClientTesterFunc = Callable[[Any], Awaitable[None]]

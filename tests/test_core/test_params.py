@@ -132,7 +132,7 @@ async def test_query_param_and_required_and_optional_params_async(
 
 def test_query_model(app: FastAPI, client_tester: ClientTester) -> None:
     def client_test(client: Any) -> None:  # noqa: ANN401
-        from httpx import QueryParams
+        from httpx2 import QueryParams
 
         result1 = client.query_param_with_model(text="fooquux", num=123)
         assert result1.response.url.params == QueryParams(
@@ -151,7 +151,7 @@ async def test_query_model_async(
     app: FastAPI, async_client_tester: AsyncClientTester
 ) -> None:
     async def client_test(client: Any) -> None:  # noqa: ANN401
-        from httpx import QueryParams
+        from httpx2 import QueryParams
 
         result1 = await client.query_param_with_model(text="fooquux", num=123)
         assert result1.response.url.params == QueryParams(
@@ -168,7 +168,7 @@ async def test_query_model_async(
 
 def test_query_list(app: FastAPI, client_tester: ClientTester) -> None:
     def client_test(client: Any) -> None:  # noqa: ANN401
-        from httpx import QueryParams
+        from httpx2 import QueryParams
 
         result = client.query_param_list([123, 4, 56])
         assert result.response.url.params == QueryParams({"nums": [123, 4, 56]})
@@ -181,7 +181,7 @@ async def test_query_list_async(
     app: FastAPI, async_client_tester: AsyncClientTester
 ) -> None:
     async def client_test(client: Any) -> None:  # noqa: ANN401
-        from httpx import QueryParams
+        from httpx2 import QueryParams
 
         result = await client.query_param_list([123, 4, 56])
         assert result.response.url.params == QueryParams({"nums": [123, 4, 56]})

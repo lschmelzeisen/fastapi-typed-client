@@ -28,6 +28,7 @@ def test_route_without_methods() -> None:
     route = next(
         r for r in app.routes if isinstance(r, APIRoute) and r.name == endpoint.__name__
     )
+    assert route.methods is not None
     route.methods.clear()
 
     with pytest.raises(RuntimeError):
