@@ -17,9 +17,10 @@ from fastapi.dependencies.utils import (
     get_flat_dependant,
     get_typed_return_annotation,
 )
+from fastapi.openapi.utils import _get_api_route_for_openapi
 from fastapi.params import Body, File, Form
 from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.routing import APIRoute, BaseRoute
+from fastapi.routing import BaseRoute, _APIRouteLike, _iter_routes_with_context
 from fastapi.security import (
     APIKeyCookie,
     APIKeyHeader,
@@ -101,15 +102,19 @@ class Route(NamedTuple):
     streaming_kind: RouteStreamingKind | None = None
 
 
-def parse_routes(routes: Iterable[BaseRoute]) -> Sequence[Route]:
-    result = [_parse_route(route) for route in routes if isinstance(route, APIRoute)]
+def parse_routes(routes: Sequence[BaseRoute]) -> Sequence[Route]:
+    result = list[Route]()
+    for route, route_context in _iter_routes_with_context(routes):
+        api_route = _get_api_route_for_openapi(route, route_context)
+        if api_route is not None:
+            result.append(_parse_route(api_route))
     if not result:
         raise RuntimeError("Does not have any routes.")
     _check_duplicate_names(result)
     return result
 
 
-def _parse_route(route: APIRoute) -> Route:
+def _parse_route(route: _APIRouteLike) -> Route:
     if not route.name.isidentifier():
         raise RuntimeError(
             f"Route name `{route.name}` is not a valid Python identifier."
@@ -148,7 +153,7 @@ def _parse_route(route: APIRoute) -> Route:
 
 
 def _detect_streaming_kind(
-    route: APIRoute,
+    route: _APIRouteLike,
     return_annotation: Any,  # noqa: ANN401
 ) -> RouteStreamingKind | None:
     # Mirror FastAPI's own flags, which stream JSON-Lines / SSE only for actual
@@ -198,7 +203,7 @@ def _unwrap_iterable(type_: Any) -> Any:  # noqa: ANN401
     return None
 
 
-def _parse_params(route: APIRoute) -> tuple[Sequence[RouteParam], bool]:
+def _parse_params(route: _APIRouteLike) -> tuple[Sequence[RouteParam], bool]:
     incompatible_names = set[str]()
     seen_names = set[str]()
     disallowed_names = set[str]()
@@ -339,7 +344,7 @@ def _is_field_group_compatible(group: Sequence[ModelField]) -> bool:
 
 
 def _parse_security_params(
-    route: APIRoute, dependant: Dependant
+    route: _APIRouteLike, dependant: Dependant
 ) -> Sequence[RouteParam]:
     result = list[RouteParam]()
     seen_schemes = set[SecurityBase]()
@@ -355,7 +360,7 @@ def _parse_security_params(
 
 
 def _route_param_for_security_scheme(
-    route: APIRoute, scheme: SecurityBase, param_name: str | None
+    route: _APIRouteLike, scheme: SecurityBase, param_name: str | None
 ) -> RouteParam:
     type_: type = str
     security_kind: RouteSecurityKind
@@ -400,7 +405,7 @@ def _route_param_for_security_scheme(
 
 
 def _parse_responses(
-    route: APIRoute,
+    route: _APIRouteLike,
     *,
     has_params: bool,
     streaming_kind: RouteStreamingKind | None,
@@ -435,7 +440,7 @@ def _parse_responses(
 
 
 def _resolve_default_type(
-    route: APIRoute,
+    route: _APIRouteLike,
     *,
     streaming_kind: RouteStreamingKind | None,
 ) -> type:
