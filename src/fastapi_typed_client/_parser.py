@@ -7,7 +7,7 @@ from collections.abc import (
 from enum import Enum, auto
 from http import HTTPMethod, HTTPStatus
 from inspect import signature
-from typing import Any, NamedTuple, get_args, get_origin
+from typing import Any, NamedTuple, cast, get_args, get_origin
 
 from fastapi._compat import ModelField
 from fastapi.datastructures import DefaultPlaceholder
@@ -17,10 +17,9 @@ from fastapi.dependencies.utils import (
     get_flat_dependant,
     get_typed_return_annotation,
 )
-from fastapi.openapi.utils import _get_api_route_for_openapi
 from fastapi.params import Body, File, Form
 from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.routing import BaseRoute, _APIRouteLike, _iter_routes_with_context
+from fastapi.routing import APIRoute, BaseRoute, _APIRouteLike, iter_route_contexts
 from fastapi.security import (
     APIKeyCookie,
     APIKeyHeader,
@@ -104,10 +103,9 @@ class Route(NamedTuple):
 
 def parse_routes(routes: Sequence[BaseRoute]) -> Sequence[Route]:
     result = list[Route]()
-    for route, route_context in _iter_routes_with_context(routes):
-        api_route = _get_api_route_for_openapi(route, route_context)
-        if api_route is not None:
-            result.append(_parse_route(api_route))
+    for route_context in iter_route_contexts(routes):
+        if isinstance(route_context.original_route, APIRoute):
+            result.append(_parse_route(cast(_APIRouteLike, route_context)))
     if not result:
         raise RuntimeError("Does not have any routes.")
     _check_duplicate_names(result)
