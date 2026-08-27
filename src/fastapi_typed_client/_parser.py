@@ -11,12 +11,13 @@ from typing import Any, NamedTuple, cast, get_args, get_origin
 
 from fastapi._compat import ModelField
 from fastapi.datastructures import DefaultPlaceholder
-from fastapi.dependencies.models import Dependant
+from fastapi.dependencies.models import Dependant, _get_security_scheme
 from fastapi.dependencies.utils import (
+    _get_flat_body_params,
     _get_flat_fields_from_params,
-    get_flat_dependant,
     get_typed_return_annotation,
 )
+from fastapi.openapi.utils import _get_openapi_dependency_data
 from fastapi.params import Body, File, Form
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute, BaseRoute, _APIRouteLike, iter_route_contexts
@@ -207,25 +208,32 @@ def _parse_params(route: _APIRouteLike) -> tuple[Sequence[RouteParam], bool]:
     disallowed_names = set[str]()
     duplicate_names = set[str]()
 
-    dependant = get_flat_dependant(route.dependant, skip_repeats=True)
+    # Walk the dependency tree the same way FastAPI does for its OpenAPI schema, so
+    # that parameters and security schemes declared in (nested) sub-dependencies are
+    # collected and repeated dependencies are only visited once.
+    dependency_data = _get_openapi_dependency_data(route.dependant)
 
     fields_params_map: dict[RouteParamKind, list[ModelField]] = {
-        RouteParamKind.PATH: dependant.path_params,
-        RouteParamKind.QUERY: dependant.query_params,
-        RouteParamKind.HEADER: dependant.header_params,
-        RouteParamKind.COOKIE: dependant.cookie_params,
+        RouteParamKind.PATH: dependency_data.path_params,
+        RouteParamKind.QUERY: dependency_data.query_params,
+        RouteParamKind.HEADER: dependency_data.header_params,
+        RouteParamKind.COOKIE: dependency_data.cookie_params,
     }
     fields_params_map = {
         kind: _get_flat_fields_from_params(fields)
         for kind, fields in fields_params_map.items()
     }
-    fields_params_map.update(_partition_body_fields(dependant.body_params))
+    fields_params_map.update(
+        _partition_body_fields(_get_flat_body_params(route.dependant))
+    )
 
     route_params_map: dict[RouteParamKind, Sequence[RouteParam]] = {
         kind: _fields_to_route_params(kind, fields, incompatible_names)
         for kind, fields in fields_params_map.items()
     }
-    route_params_map[RouteParamKind.SECURITY] = _parse_security_params(route, dependant)
+    route_params_map[RouteParamKind.SECURITY] = _parse_security_params(
+        route, [dep for dep, _scopes in dependency_data.security_dependencies]
+    )
 
     if (
         route_params_map[RouteParamKind.FILE] or route_params_map[RouteParamKind.FORM]
@@ -342,14 +350,12 @@ def _is_field_group_compatible(group: Sequence[ModelField]) -> bool:
 
 
 def _parse_security_params(
-    route: _APIRouteLike, dependant: Dependant
+    route: _APIRouteLike, security_dependants: Sequence[Dependant]
 ) -> Sequence[RouteParam]:
     result = list[RouteParam]()
     seen_schemes = set[SecurityBase]()
-    for dep in dependant.dependencies:
-        if not dep._is_security_scheme:  # noqa: SLF001
-            continue
-        scheme = dep._security_scheme  # noqa: SLF001
+    for dep in security_dependants:
+        scheme = _get_security_scheme(dependant=dep)
         if scheme in seen_schemes:
             continue
         seen_schemes.add(scheme)
