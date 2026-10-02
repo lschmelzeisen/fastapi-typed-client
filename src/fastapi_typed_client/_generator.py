@@ -189,7 +189,7 @@ class ClientCodeGenerator:
             + indent(self._get_route_specific_params_code(route.params))
             + indent(self._get_route_generic_params_code(raise_if_not_default_status))
             + ") -> "
-            + self._get_route_responses_code(responses, route.streaming_kind)
+            + self._get_route_responses_code(route, responses)
         )
 
     def _get_route_specific_params_code(self, params: Sequence[RouteParam]) -> str:
@@ -236,8 +236,8 @@ class ClientCodeGenerator:
 
     def _get_route_responses_code(
         self,
+        route: Route,
         responses: RouteResponse | Collection[RouteResponse] | None,
-        streaming_kind: RouteStreamingKind | None,
     ) -> str:
         if not responses:
             # The implementation signature is hidden from callers by the overloads.
@@ -256,9 +256,12 @@ class ClientCodeGenerator:
             if i != 0:
                 code += "\n    | "
             response_type_code = self._get_response_type_code(response.type_)
-            if i == 0 and streaming_kind is not None:
+            if (
+                route.streaming_kind is not None
+                and response.status == route.default_status
+            ):
                 response_type_code = self._wrap_streaming_response_type_code(
-                    response_type_code, streaming_kind
+                    response_type_code, route.streaming_kind
                 )
             code += (
                 f"{self._idents.result}["

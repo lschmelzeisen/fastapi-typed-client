@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterable, Iterable
+from http import HTTPStatus
 from typing import Any
 
 import pytest
@@ -78,3 +79,83 @@ async def test_stream_json_lines_async(
         assert next(expected_iter, None) is None
 
     await async_client_tester(app, client_test)
+
+
+@pytest.fixture
+def app_with_lower_additional_status() -> FastAPI:
+    app = FastAPI()
+
+    # The additional `200 OK` response sorts before the default `201 Created` one.
+    @app.post(
+        "/foo", status_code=HTTPStatus.CREATED.value, responses={200: {"model": str}}
+    )
+    def foo() -> Iterable[TextAndNum]:
+        yield from TEXT_AND_NUM_DATA
+
+    return app
+
+
+# Sets `import_client_base=True` to import `FastAPIClientResult` for `assert_type` and
+# `assert_format_of_generated_code=False`, see test_multiple_responses.py for why.
+
+
+def test_stream_json_lines_lower_additional_status(
+    app_with_lower_additional_status: FastAPI, client_tester: ClientTester
+) -> None:
+    def client_test(client: Any) -> None:  # noqa: ANN401
+        from collections.abc import Iterator
+        from http import HTTPStatus
+        from typing import Literal, assert_type
+
+        from fastapi_typed_client import FastAPIClientResult
+
+        from ..shared import TEXT_AND_NUM_DATA, TextAndNum
+
+        result = client.foo()
+        assert_type(  # type: ignore[client_tester_only]
+            result,
+            FastAPIClientResult[Literal[HTTPStatus.OK], str]
+            | FastAPIClientResult[Literal[HTTPStatus.CREATED], Iterator[TextAndNum]],
+        )
+        assert result.status == HTTPStatus.CREATED
+        assert list(result.data) == TEXT_AND_NUM_DATA
+
+    client_tester(
+        app_with_lower_additional_status,
+        client_test,
+        import_client_base=True,
+        assert_sorting_of_imports=False,
+        assert_format_of_generated_code=False,
+    )
+
+
+async def test_stream_json_lines_lower_additional_status_async(
+    app_with_lower_additional_status: FastAPI, async_client_tester: AsyncClientTester
+) -> None:
+    async def client_test(client: Any) -> None:  # noqa: ANN401
+        from collections.abc import AsyncIterator
+        from http import HTTPStatus
+        from typing import Literal, assert_type
+
+        from fastapi_typed_client import FastAPIClientResult
+
+        from ..shared import TEXT_AND_NUM_DATA, TextAndNum
+
+        result = await client.foo()
+        assert_type(  # type: ignore[client_tester_only]
+            result,
+            FastAPIClientResult[Literal[HTTPStatus.OK], str]
+            | FastAPIClientResult[
+                Literal[HTTPStatus.CREATED], AsyncIterator[TextAndNum]
+            ],
+        )
+        assert result.status == HTTPStatus.CREATED
+        assert [item async for item in result.data] == TEXT_AND_NUM_DATA
+
+    await async_client_tester(
+        app_with_lower_additional_status,
+        client_test,
+        import_client_base=True,
+        assert_sorting_of_imports=False,
+        assert_format_of_generated_code=False,
+    )
