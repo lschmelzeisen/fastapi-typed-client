@@ -367,7 +367,7 @@ def test_shared_body_param_unembedded(
     app_with_shared_dep_body_params: FastAPI, client_tester: ClientTester
 ) -> None:
     def client_test(client: Any) -> None:  # noqa: ANN401
-        from ..shared import TextAndNum  # type: ignore[client_tester_only]
+        from ..shared import TextAndNum
 
         result = client.unembedded_body_two_deps(TextAndNum(text="aaa", num=1))
         assert result.response.request.content == b'{"text":"aaa","num":1}'
@@ -384,7 +384,7 @@ async def test_shared_body_param_unembedded_async(
     app_with_shared_dep_body_params: FastAPI, async_client_tester: AsyncClientTester
 ) -> None:
     async def client_test(client: Any) -> None:  # noqa: ANN401
-        from ..shared import TextAndNum  # type: ignore[client_tester_only]
+        from ..shared import TextAndNum
 
         result = await client.unembedded_body_two_deps(TextAndNum(text="aaa", num=1))
         assert result.response.request.content == b'{"text":"aaa","num":1}'
@@ -401,7 +401,7 @@ def test_shared_body_param_embedded(
     app_with_shared_dep_body_params: FastAPI, client_tester: ClientTester
 ) -> None:
     def client_test(client: Any) -> None:  # noqa: ANN401
-        from ..shared import TextAndNum  # type: ignore[client_tester_only]
+        from ..shared import TextAndNum
 
         result = client.embedded_body_two_deps(
             param=TextAndNum(text="aaa", num=1), param2=TextAndNum(text="bbb", num=2)
@@ -423,7 +423,7 @@ async def test_shared_body_param_embedded_async(
     app_with_shared_dep_body_params: FastAPI, async_client_tester: AsyncClientTester
 ) -> None:
     async def client_test(client: Any) -> None:  # noqa: ANN401
-        from ..shared import TextAndNum  # type: ignore[client_tester_only]
+        from ..shared import TextAndNum
 
         result = await client.embedded_body_two_deps(
             param=TextAndNum(text="aaa", num=1), param2=TextAndNum(text="bbb", num=2)
@@ -445,7 +445,7 @@ def test_shared_body_param_mixed_embed_unembedded_first(
     app_with_shared_dep_body_params: FastAPI, client_tester: ClientTester
 ) -> None:
     def client_test(client: Any) -> None:  # noqa: ANN401
-        from ..shared import TextAndNum  # type: ignore[client_tester_only]
+        from ..shared import TextAndNum
 
         # One dep declares the body via `Body()` and the other via
         # `Body(embed=True)`. They share the same Python name `param` and the
@@ -471,7 +471,7 @@ async def test_shared_body_param_mixed_embed_unembedded_first_async(
     app_with_shared_dep_body_params: FastAPI, async_client_tester: AsyncClientTester
 ) -> None:
     async def client_test(client: Any) -> None:  # noqa: ANN401
-        from ..shared import TextAndNum  # type: ignore[client_tester_only]
+        from ..shared import TextAndNum
 
         # One dep declares the body via `Body()` and the other via
         # `Body(embed=True)`. They share the same Python name `param` and the
@@ -497,7 +497,7 @@ def test_shared_body_param_mixed_embed_embedded_first(
     app_with_shared_dep_body_params: FastAPI, client_tester: ClientTester
 ) -> None:
     def client_test(client: Any) -> None:  # noqa: ANN401
-        from ..shared import TextAndNum  # type: ignore[client_tester_only]
+        from ..shared import TextAndNum
 
         # Swapping the dep order flips FastAPI's embed decision: the
         # `Body(embed=True)` dep comes first, so the route is embedded and
@@ -519,7 +519,7 @@ async def test_shared_body_param_mixed_embed_embedded_first_async(
     app_with_shared_dep_body_params: FastAPI, async_client_tester: AsyncClientTester
 ) -> None:
     async def client_test(client: Any) -> None:  # noqa: ANN401
-        from ..shared import TextAndNum  # type: ignore[client_tester_only]
+        from ..shared import TextAndNum
 
         # Swapping the dep order flips FastAPI's embed decision: the
         # `Body(embed=True)` dep comes first, so the route is embedded and

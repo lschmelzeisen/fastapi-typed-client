@@ -1,5 +1,13 @@
 from base64 import b64encode
-from collections.abc import AsyncIterator, Iterator, Mapping, MutableMapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Generator,
+    Iterator,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from contextlib import asynccontextmanager, contextmanager
 from http import HTTPMethod, HTTPStatus
 from typing import Any, Literal, NamedTuple, Self, TypedDict
@@ -39,8 +47,14 @@ _IMPORTS = [
     warn,
 ]
 _IMPORTS_VALIDATION_ERROR = [BaseModel, Sequence]
-_IMPORTS_SYNC_CLIENT = [Client, Iterator, contextmanager]
-_IMPORTS_ASYNC_CLIENT = [AsyncClient, AsyncIterator, asynccontextmanager, ASGITransport]
+_IMPORTS_SYNC_CLIENT = [Client, Generator, Iterator, contextmanager]
+_IMPORTS_ASYNC_CLIENT = [
+    AsyncClient,
+    AsyncGenerator,
+    AsyncIterator,
+    asynccontextmanager,
+    ASGITransport,
+]
 _IMPORTS_TYPE_CHECKING = [FastAPI]
 
 
@@ -115,7 +129,7 @@ class FastAPIClientBase:
     @contextmanager
     def from_app(
         cls, app: FastAPI, base_url: str = "http://testserver"
-    ) -> Iterator[Self]:
+    ) -> Generator[Self]:
         from fastapi.testclient import TestClient
 
         with TestClient(app, base_url=base_url) as client:
@@ -400,7 +414,9 @@ class FastAPIClientBase:
             # Spec deviation: `lastEventId` doesn't persist across events. Each
             # yielded event reflects only what was on the wire for it; events
             # without an `id:` line surface as `id=None`.
-            fields, data_lines, comment_lines = {}, [], []
+            fields = {}
+            data_lines = []
+            comment_lines = []
         event = cls._finalize_sse_event(fields, data_lines, comment_lines)
         if event is not None:
             yield event
@@ -446,7 +462,7 @@ class FastAPIClientAsyncBase:
     @asynccontextmanager
     async def from_app(
         cls, app: FastAPI, base_url: str = "http://testserver"
-    ) -> AsyncIterator[Self]:
+    ) -> AsyncGenerator[Self]:
         async with AsyncClient(
             transport=ASGITransport(app), base_url=base_url
         ) as client:
@@ -718,7 +734,9 @@ class FastAPIClientAsyncBase:
             # Spec deviation: `lastEventId` doesn't persist across events. Each
             # yielded event reflects only what was on the wire for it; events
             # without an `id:` line surface as `id=None`.
-            fields, data_lines, comment_lines = {}, [], []
+            fields = {}
+            data_lines = []
+            comment_lines = []
         event = cls._finalize_sse_event(fields, data_lines, comment_lines)
         if event is not None:
             yield event

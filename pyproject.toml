@@ -74,9 +74,19 @@ testpaths = ["tests"]
 xfail_strict = true
 
 [tool.pyrefly]
+preset = "all"
 python-version = "3.14"
 infer-with-first-use = false
 search-path = ["src", "tests", "examples"]
+
+[tool.pyrefly.errors]
+# Disabled because they are too inconvenient to fix (e.g. we need `Any` for runtime type
+# forms like response models).
+explicit-any = false
+implicit-bool = false
+unknown-argument-type = false
+unknown-variable-type = false
+unused-call-result = false
 
 [tool.ruff.format]
 exclude = ["*.md"] # Don't reformat code blocks in Markdown files.

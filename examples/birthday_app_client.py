@@ -1,5 +1,6 @@
 from base64 import b64encode
 from collections.abc import (
+    Generator,
     Iterator,
     Mapping,
     MutableMapping,
@@ -21,6 +22,10 @@ from typing import (
 )
 from warnings import warn
 
+from birthday_app import (
+    BirthdayData,
+    GetBirthdayError,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.sse import ServerSentEvent
 from httpx2 import (
@@ -32,11 +37,6 @@ from httpx2 import (
 from pydantic import (
     BaseModel,
     TypeAdapter,
-)
-
-from birthday_app import (
-    BirthdayData,
-    GetBirthdayError,
 )
 
 if TYPE_CHECKING:
@@ -111,7 +111,7 @@ class BirthdayAppClient:
     @contextmanager
     def from_app(
         cls, app: FastAPI, base_url: str = "http://testserver"
-    ) -> Iterator[Self]:
+    ) -> Generator[Self]:
         from fastapi.testclient import TestClient
 
         with TestClient(app, base_url=base_url) as client:
@@ -396,7 +396,9 @@ class BirthdayAppClient:
             # Spec deviation: `lastEventId` doesn't persist across events. Each
             # yielded event reflects only what was on the wire for it; events
             # without an `id:` line surface as `id=None`.
-            fields, data_lines, comment_lines = {}, [], []
+            fields = {}
+            data_lines = []
+            comment_lines = []
         event = cls._finalize_sse_event(fields, data_lines, comment_lines)
         if event is not None:
             yield event
@@ -450,7 +452,10 @@ class BirthdayAppClient:
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]
-        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
+        | BirthdayAppClientResult[
+            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
+            BirthdayAppClientHTTPValidationError,
+        ]
     ): ...
     def register_birthday(
         self,
@@ -458,8 +463,8 @@ class BirthdayAppClient:
         *,
         raise_if_not_default_status: bool = False,
         client_exts: BirthdayAppClientExtensions | None = None,
-    ) -> BirthdayAppClientResult[HTTPStatus, Any]:
-        return self._route_handler(  # type: ignore
+    ) -> Any:
+        return self._route_handler(
             path="/birthday",
             method=HTTPMethod.POST,
             default_status=HTTPStatus.CREATED,
@@ -492,7 +497,10 @@ class BirthdayAppClient:
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]
         | BirthdayAppClientResult[Literal[HTTPStatus.NOT_FOUND], GetBirthdayError]
-        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
+        | BirthdayAppClientResult[
+            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
+            BirthdayAppClientHTTPValidationError,
+        ]
     ): ...
     def get_birthday(
         self,
@@ -500,8 +508,8 @@ class BirthdayAppClient:
         *,
         raise_if_not_default_status: bool = False,
         client_exts: BirthdayAppClientExtensions | None = None,
-    ) -> BirthdayAppClientResult[HTTPStatus, Any]:
-        return self._route_handler(  # type: ignore
+    ) -> Any:
+        return self._route_handler(
             path="/birthday/{name}",
             method=HTTPMethod.GET,
             default_status=HTTPStatus.OK,

@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from httpx2 import AsyncClient, Client
 from pyrefly.__main__ import get_pyrefly_bin
 from rich.console import Console
-from ruff.__main__ import find_ruff_bin
+from ruff import find_ruff_bin
 
 import fastapi_typed_client
 from fastapi_typed_client import generate_fastapi_typed_client
@@ -23,6 +23,8 @@ from .client_tester import (
     ClientTester,
     ClientTesterFunc,
 )
+
+_PYPROJECT_FILE = Path(__file__).parent.parent / "pyproject.toml"
 
 
 @pytest.fixture(scope="session")
@@ -251,9 +253,18 @@ def _assert_code_quality(
     assert_format_of_generated_code: bool,
 ) -> None:
     if assert_type_check_passes:
+        # The `[tool.pyrefly]` settings of pyproject.toml don't apply to the temporary
+        # directories of generated clients unless passed explicitly. The search path
+        # makes the temporary `client` and `shared` modules importable (taking
+        # precedence over `tests/shared.py`).
         _assert_process_result(
             "Type-checking",
-            (pyrefly_bin, "check"),
+            (
+                pyrefly_bin,
+                "check",
+                *("--config", str(_PYPROJECT_FILE)),
+                *("--search-path", str(client_file.parent)),
+            ),
             client_file,
             client_test_file,
         )

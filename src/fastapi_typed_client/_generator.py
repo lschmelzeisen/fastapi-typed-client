@@ -148,8 +148,11 @@ class ClientCodeGenerator:
         ).generate(routes, self._import_client_base)
 
     def _get_route_code(self, route: Route) -> str:
+        # Without overloads (i.e., with a single response), the method's declared
+        # return type is more specific than the one of `_route_handler`.
+        type_ignore = "  # type: ignore" if len(route.responses) == 1 else ""
         return self._get_route_signature_code(route) + indent(
-            f"return {'await ' if self._async else ''}self._route_handler(  # type: ignore\n"
+            f"return {'await ' if self._async else ''}self._route_handler({type_ignore}\n"
             f"    path={dq_str_repr(route.path)},\n"
             f"    method={self._impr(HTTPMethod)}.{route.method.name},\n"
             f"    default_status={self._impr(HTTPStatus)}.{route.default_status.name},\n"
@@ -237,7 +240,11 @@ class ClientCodeGenerator:
         streaming_kind: RouteStreamingKind | None,
     ) -> str:
         if not responses:
-            return f"{self._idents.result}[{self._impr(HTTPStatus)}, {self._impr(Any)}]"
+            # The implementation signature is hidden from callers by the overloads.
+            # Pyright and mypy require its return type to be compatible with each
+            # overload's, which e.g. `Result[HTTPStatus, Any]` is not (the type
+            # parameters are invariant).
+            return self._impr(Any)
 
         if isinstance(responses, RouteResponse):
             responses = (responses,)
@@ -278,7 +285,7 @@ class ClientCodeGenerator:
         return self._impr(type_)
 
     def _get_models_dict_code(self, responses: Collection[RouteResponse]) -> str:
-        lines = []
+        lines = list[str]()
         for response in responses:
             status_str = f"{self._impr(HTTPStatus)}.{response.status.name}"
             # The dict holds runtime types. `NoneType` renders as `None` in the
@@ -535,6 +542,11 @@ class _ImportCodeGenerator:
             return _ImportGroup.SITE_PACKAGE
         return _ImportGroup.LOCAL
 
+    @staticmethod
+    def _import_with_name_sort_key(import_: Import) -> tuple[bool, str]:
+        name = import_.name or ""
+        return not name.isupper(), name
+
     @classmethod
     def _get_imports_code_for_import_group(cls, imports: AbstractSet[Import]) -> str:
         def alias_str(import_: Import) -> str:
@@ -566,9 +578,7 @@ class _ImportCodeGenerator:
             if not imports_for_module:
                 continue
 
-            imports_for_module.sort(
-                key=lambda import_: (not import_.name.isupper(), import_.name)
-            )
+            imports_for_module.sort(key=cls._import_with_name_sort_key)
 
             if len(imports_for_module) == 1:
                 import_ = imports_for_module[0]

@@ -20,7 +20,7 @@ from fastapi.dependencies.utils import (
 from fastapi.openapi.utils import _get_openapi_dependency_data
 from fastapi.params import Body, File, Form
 from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.routing import APIRoute, BaseRoute, _APIRouteLike, iter_route_contexts
+from fastapi.routing import APIRoute, _APIRouteLike, iter_route_contexts
 from fastapi.security import (
     APIKeyCookie,
     APIKeyHeader,
@@ -33,6 +33,7 @@ from fastapi.security import (
 )
 from fastapi.security.base import SecurityBase
 from fastapi.sse import EventSourceResponse
+from starlette.routing import BaseRoute
 
 from ._utils import to_snake_case
 from .client import FastAPIClientHTTPValidationError
@@ -269,7 +270,10 @@ def _parse_params(route: _APIRouteLike) -> tuple[Sequence[RouteParam], bool]:
                 f"names are {error}."
             )
 
-    result.sort(key=lambda param: (not param.required, param.name))
+    def sort_key(param: RouteParam) -> tuple[bool, str]:
+        return not param.required, param.name
+
+    result.sort(key=sort_key)
 
     # Couldn't find a better way to find this out.
     is_body_embedded = route._embed_body_fields  # noqa: SLF001
@@ -438,7 +442,10 @@ def _parse_responses(
         type_ = response_field.field_info.annotation or type(Any)
         result.append(RouteResponse(status=HTTPStatus(int(status)), type_=type_))
 
-    result.sort(key=lambda response: response.status)
+    def sort_key(response: RouteResponse) -> HTTPStatus:
+        return response.status
+
+    result.sort(key=sort_key)
 
     return result, default_status
 

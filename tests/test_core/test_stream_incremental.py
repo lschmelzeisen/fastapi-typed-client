@@ -11,7 +11,7 @@ and asserts the stream closes naturally. A buffering client would deadlock
 at the first read — the body has no end-of-stream until `/release` fires.
 """
 
-from collections.abc import AsyncIterable, AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -88,7 +88,7 @@ def app() -> FastAPI:  # noqa: C901 — four similar endpoints + shared event he
 
 
 @asynccontextmanager
-async def _serve_uvicorn(app: FastAPI) -> AsyncIterator[str]:
+async def _serve_uvicorn(app: FastAPI) -> AsyncGenerator[str]:
     config = uvicorn.Config(
         app,
         host="127.0.0.1",
@@ -134,6 +134,7 @@ def test_stream_sse_real_socket(
 ) -> None:
     def client_test(client: Any) -> None:  # noqa: ANN401
         import time
+        import typing
         from concurrent.futures import ThreadPoolExecutor
 
         from ..shared import TextAndNum
@@ -144,7 +145,7 @@ def test_stream_sse_real_socket(
         assert first.data == TextAndNum(text="tick", num=0)
         assert second.data == TextAndNum(text="tick", num=1)
 
-        rest: list = []
+        rest: list[typing.Any] = []
 
         def drain() -> None:
             for item in stream:
@@ -178,7 +179,7 @@ def test_stream_json_lines_real_socket(
         assert first == TextAndNum(text="tick", num=0)
         assert second == TextAndNum(text="tick", num=1)
 
-        rest: list = []
+        rest: list[TextAndNum] = []
 
         def drain() -> None:
             for item in stream:
@@ -211,7 +212,7 @@ def test_stream_raw_bytes_real_socket(
                 break
         assert buf == b"tick-0\ntick-1\n"
 
-        rest: list = []
+        rest: list[bytes] = []
 
         def drain() -> None:
             for chunk in stream:
@@ -244,7 +245,7 @@ def test_stream_raw_str_real_socket(
                 break
         assert buf == "tick-0\ntick-1\n"
 
-        rest: list = []
+        rest: list[str] = []
 
         def drain() -> None:
             for chunk in stream:
@@ -268,6 +269,8 @@ async def test_stream_sse_real_socket_async(
     async_client_tester: AsyncClientTester,
 ) -> None:
     async def client_test(client: Any) -> None:  # noqa: ANN401
+        import typing
+
         from anyio import create_task_group, fail_after, sleep
 
         from ..shared import TextAndNum
@@ -279,7 +282,7 @@ async def test_stream_sse_real_socket_async(
         assert first.data == TextAndNum(text="tick", num=0)
         assert second.data == TextAndNum(text="tick", num=1)
 
-        rest: list = []
+        rest: list[typing.Any] = []
 
         async def drain() -> None:
             async for item in stream:
@@ -315,7 +318,7 @@ async def test_stream_json_lines_real_socket_async(
         assert first == TextAndNum(text="tick", num=0)
         assert second == TextAndNum(text="tick", num=1)
 
-        rest: list = []
+        rest: list[TextAndNum] = []
 
         async def drain() -> None:
             async for item in stream:
@@ -350,7 +353,7 @@ async def test_stream_raw_bytes_real_socket_async(
                 break
         assert buf == b"tick-0\ntick-1\n"
 
-        rest: list = []
+        rest: list[bytes] = []
 
         async def drain() -> None:
             async for chunk in stream:
@@ -385,7 +388,7 @@ async def test_stream_raw_str_real_socket_async(
                 break
         assert buf == "tick-0\ntick-1\n"
 
-        rest: list = []
+        rest: list[str] = []
 
         async def drain() -> None:
             async for chunk in stream:

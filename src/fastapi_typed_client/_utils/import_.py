@@ -52,7 +52,7 @@ def load_import(module: str, name: str | None) -> Any:  # noqa: ANN401
 def _is_pydantic_field_info(value: Any) -> bool:  # noqa: ANN401
     # Scuffed isinstance() check because we don't want to import
     # pydantic.fields.FieldInfo for users that don't need it.
-    cls = value.__class__
+    cls = type(value)
     return cls.__module__ == "pydantic.fields" and cls.__name__ == "FieldInfo"
 
 
