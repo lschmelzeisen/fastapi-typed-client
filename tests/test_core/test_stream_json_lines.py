@@ -3,7 +3,8 @@ from http import HTTPStatus
 from typing import Any
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from ..client_tester import AsyncClientTester, ClientTester
 from ..shared import TEXT_AND_NUM_DATA, TextAndNum
@@ -158,4 +159,64 @@ async def test_stream_json_lines_lower_additional_status_async(
         import_client_base=True,
         assert_sorting_of_imports=False,
         assert_format_of_generated_code=False,
+    )
+
+
+class _NotFoundError(Exception):
+    pass
+
+
+@pytest.fixture
+def app_with_not_found() -> FastAPI:
+    app = FastAPI()
+
+    @app.exception_handler(_NotFoundError)
+    def handle_not_found(_request: Request, _exc: _NotFoundError) -> JSONResponse:
+        return JSONResponse("Not found", status_code=HTTPStatus.NOT_FOUND.value)
+
+    def raise_not_found() -> None:
+        raise _NotFoundError
+
+    @app.get(
+        "/foo",
+        responses={HTTPStatus.NOT_FOUND.value: {"model": str}},
+        dependencies=[Depends(raise_not_found)],
+    )
+    def foo() -> Iterable[TextAndNum]:
+        yield from TEXT_AND_NUM_DATA
+
+    return app
+
+
+def test_stream_json_lines_not_default_status(
+    app_with_not_found: FastAPI, client_tester: ClientTester
+) -> None:
+    def client_test(client: Any) -> None:  # noqa: ANN401
+        from http import HTTPStatus
+
+        result = client.foo()
+        assert result.status == HTTPStatus.NOT_FOUND
+        assert result.data == "Not found"
+        assert result.response.text == '"Not found"'
+        assert result.response.is_closed
+
+    client_tester(
+        app_with_not_found, client_test, assert_format_of_generated_code=False
+    )
+
+
+async def test_stream_json_lines_not_default_status_async(
+    app_with_not_found: FastAPI, async_client_tester: AsyncClientTester
+) -> None:
+    async def client_test(client: Any) -> None:  # noqa: ANN401
+        from http import HTTPStatus
+
+        result = await client.foo()
+        assert result.status == HTTPStatus.NOT_FOUND
+        assert result.data == "Not found"
+        assert result.response.text == '"Not found"'
+        assert result.response.is_closed
+
+    await async_client_tester(
+        app_with_not_found, client_test, assert_format_of_generated_code=False
     )

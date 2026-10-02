@@ -324,12 +324,13 @@ class FastAPIClientBase:
             data = self._build_streaming_data(streaming_kind, response, model)
         elif streaming_kind is not None:
             # Streaming endpoint returned a non-default status (typically a JSON
-            # error body). Drain it, then release the stream-mode response.
+            # error body). Read it (unlike iterating, this retains the body, e.g. for
+            # `response.text`), then release the stream-mode response.
             try:
-                text = "".join(response.iter_text())
+                response.read()
             finally:
                 response.close()
-            data = TypeAdapter(model).validate_json(text or "null")
+            data = TypeAdapter(model).validate_json(response.text or "null")
         else:
             # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so the
             # declared model still validatess.
@@ -640,12 +641,13 @@ class FastAPIClientAsyncBase:
             data = self._build_streaming_data(streaming_kind, response, model)
         elif streaming_kind is not None:
             # Streaming endpoint returned a non-default status (typically a JSON
-            # error body). Drain it, then release the stream-mode response.
+            # error body). Read it (unlike iterating, this retains the body, e.g. for
+            # `response.text`), then release the stream-mode response.
             try:
-                text = "".join([part async for part in response.aiter_text()])
+                await response.aread()
             finally:
                 await response.aclose()
-            data = TypeAdapter(model).validate_json(text or "null")
+            data = TypeAdapter(model).validate_json(response.text or "null")
         else:
             text = ""
             async for part in response.aiter_text():

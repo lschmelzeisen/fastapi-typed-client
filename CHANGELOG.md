@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- On streaming routes, responses with a non-default status code now retain their body (previously, `response.text` raised `ResponseNotRead`).
 - On streaming routes with an additional response whose status code sorts before the default one, the streaming item type is now applied to the default response in the generated return type.
 
 ## [0.6.0](https://github.com/lschmelzeisen/fastapi-typed-client/releases/tag/v0.6.0) - 2026-08-27
