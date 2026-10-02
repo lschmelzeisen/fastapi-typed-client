@@ -19,6 +19,7 @@ from typing import (
     Self,
     TypedDict,
     overload,
+    override,
 )
 from warnings import warn
 
@@ -36,7 +37,10 @@ from httpx2 import (
 )
 from pydantic import (
     BaseModel,
+    ConfigDict,
+    JsonValue,
     TypeAdapter,
+    ValidationError,
 )
 
 if TYPE_CHECKING:
@@ -59,6 +63,34 @@ class BirthdayAppClientResult[Status: HTTPStatus, Model](NamedTuple):
     response: Response
 
 
+class BirthdayAppClientUnexpectedStatus(NamedTuple):
+    status: HTTPStatus | None
+    data: JsonValue
+    response: Response
+
+
+class BirthdayAppClientUnexpectedBody(NamedTuple):
+    status: HTTPStatus
+    data: JsonValue
+    model: type[Any]
+    validation_error: ValidationError
+    response: Response
+
+
+class BirthdayAppClientUnexpectedStreamItem(NamedTuple):
+    data: JsonValue
+    raw: str
+    model: type[Any]
+    validation_error: ValidationError
+
+
+BirthdayAppClientUnexpectedResponse = (
+    BirthdayAppClientUnexpectedStatus
+    | BirthdayAppClientUnexpectedBody
+    | BirthdayAppClientUnexpectedStreamItem
+)
+
+
 class BirthdayAppClientValidationError(BaseModel):
     loc: Sequence[str | int]
     msg: str
@@ -69,7 +101,11 @@ class BirthdayAppClientHTTPValidationError(BaseModel):
     detail: Sequence[BirthdayAppClientValidationError]
 
 
-class BirthdayAppClientNotDefaultStatusError(Exception):
+class BirthdayAppClientError(Exception):
+    pass
+
+
+class BirthdayAppClientNotDefaultStatusError(BirthdayAppClientError):
     def __init__(
         self,
         *,
@@ -80,8 +116,89 @@ class BirthdayAppClientNotDefaultStatusError(Exception):
             f"Expected default status {default_status.value} {default_status.phrase}, "
             f"but received {result.status.value} {result.status.phrase}."
         )
-        self.default_status = default_status
-        self.result = result
+        self._default_status = default_status
+        self._result = result
+
+    @property
+    def default_status(self) -> HTTPStatus:
+        return self._default_status
+
+    @property
+    def result(self) -> BirthdayAppClientResult[HTTPStatus, Any]:
+        return self._result
+
+
+class BirthdayAppClientUnexpectedResponseError(BirthdayAppClientError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        result: BirthdayAppClientUnexpectedResponse,
+    ) -> None:
+        super().__init__(message)
+        self._result = result
+
+    @property
+    def result(self) -> BirthdayAppClientUnexpectedResponse:
+        return self._result
+
+    @staticmethod
+    def _model_name(model: type[Any]) -> str:
+        # Despite being typed as `type[Any]`, models aren't necessarily classes (e.g.
+        # `list[int]` or `int | None`).
+        return model.__name__ if isinstance(model, type) else str(model)
+
+
+class BirthdayAppClientUnexpectedStatusError(BirthdayAppClientUnexpectedResponseError):
+    def __init__(self, *, result: BirthdayAppClientUnexpectedStatus) -> None:
+        status = (
+            f"{result.status.value} {result.status.phrase}"
+            if result.status is not None
+            else f"{result.response.status_code} (non-standard)"
+        )
+        super().__init__(
+            f"Received status {status}, which the route does not declare.",
+            result=result,
+        )
+        self._status_result = result
+
+    @property
+    @override
+    def result(self) -> BirthdayAppClientUnexpectedStatus:
+        return self._status_result
+
+
+class BirthdayAppClientUnexpectedBodyError(BirthdayAppClientUnexpectedResponseError):
+    def __init__(self, *, result: BirthdayAppClientUnexpectedBody) -> None:
+        super().__init__(
+            f"Received status {result.status.value} {result.status.phrase} with a "
+            "body that does not match the declared model "
+            f"`{self._model_name(result.model)}`.",
+            result=result,
+        )
+        self._body_result = result
+
+    @property
+    @override
+    def result(self) -> BirthdayAppClientUnexpectedBody:
+        return self._body_result
+
+
+class BirthdayAppClientUnexpectedStreamItemError(
+    BirthdayAppClientUnexpectedResponseError
+):
+    def __init__(self, *, result: BirthdayAppClientUnexpectedStreamItem) -> None:
+        super().__init__(
+            "Received a stream item that does not match the declared model "
+            f"`{self._model_name(result.model)}`.",
+            result=result,
+        )
+        self._stream_item_result = result
+
+    @property
+    @override
+    def result(self) -> BirthdayAppClientUnexpectedStreamItem:
+        return self._stream_item_result
 
 
 class BirthdayAppClientSecurityParam(NamedTuple):
@@ -97,6 +214,10 @@ class BirthdayAppClientSecurityParam(NamedTuple):
 
 
 class BirthdayAppClientSSE[Data](ServerSentEvent):
+    # Allows evaluating `BirthdayAppClientSSE[T | BirthdayAppClientUnexpectedStreamItem]` (which
+    # holds a `ValidationError`) at runtime, e.g. in `assert_type()` or `cast()`.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     data: Data | None = None
 
 
@@ -104,6 +225,8 @@ BIRTHDAY_APP_CLIENT_NOT_REQUIRED: Any = ...
 
 
 class BirthdayAppClient:
+    _json_value_adapter = TypeAdapter[JsonValue](JsonValue)
+
     def __init__(self, client: Client) -> None:
         self.client = client
 
@@ -225,8 +348,13 @@ class BirthdayAppClient:
         ]
         | None = None,
         raise_if_not_default_status: bool = False,
+        raise_if_unexpected_response: bool = True,
         client_exts: BirthdayAppClientExtensions | None = None,
-    ) -> BirthdayAppClientResult[HTTPStatus, Any]:
+    ) -> (
+        BirthdayAppClientResult[HTTPStatus, Any]
+        | BirthdayAppClientUnexpectedStatus
+        | BirthdayAppClientUnexpectedBody
+    ):
         if not client_exts:
             client_exts = {}
 
@@ -299,24 +427,68 @@ class BirthdayAppClient:
             )
 
         response = self.client.send(request, stream=streaming_kind is not None)
-        status = HTTPStatus(response.status_code)
+        return self._handle_response(
+            response,
+            default_status=default_status,
+            models=models,
+            streaming_kind=streaming_kind,
+            raise_if_not_default_status=raise_if_not_default_status,
+            raise_if_unexpected_response=raise_if_unexpected_response,
+        )
+
+    def _handle_response(
+        self,
+        response: Response,
+        *,
+        default_status: HTTPStatus,
+        models: Mapping[HTTPStatus, Any],
+        streaming_kind: Literal[
+            "json_lines", "server_sent_events", "raw_bytes", "raw_str"
+        ]
+        | None,
+        raise_if_not_default_status: bool,
+        raise_if_unexpected_response: bool,
+    ) -> (
+        BirthdayAppClientResult[HTTPStatus, Any]
+        | BirthdayAppClientUnexpectedStatus
+        | BirthdayAppClientUnexpectedBody
+    ):
+        status = self._parse_status(response.status_code)
+        if status is None or status not in models:
+            text = self._read_text(response)
+            unexpected_status = BirthdayAppClientUnexpectedStatus(
+                status=status, data=self._parse_json_or_none(text), response=response
+            )
+            if raise_if_unexpected_response:
+                raise BirthdayAppClientUnexpectedStatusError(result=unexpected_status)
+            return unexpected_status
 
         model = models[status]
         if streaming_kind is not None and status == default_status:
-            data = self._build_streaming_data(streaming_kind, response, model)
-        elif streaming_kind is not None:
-            # Streaming endpoint returned a non-default status (typically a JSON
-            # error body). Read it (unlike iterating, this retains the body, e.g. for
-            # `response.text`), then release the stream-mode response.
-            try:
-                response.read()
-            finally:
-                response.close()
-            data = TypeAdapter(model).validate_json(response.text or "null")
+            data = self._build_streaming_data(
+                streaming_kind, response, model, raise_if_unexpected_response
+            )
         else:
-            # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so the
-            # declared model still validatess.
-            data = TypeAdapter(model).validate_json(response.text or "null")
+            # Streaming endpoints that return a non-default status (typically a JSON
+            # error body) are read fully, just like non-streaming endpoints.
+            text = self._read_text(response)
+            try:
+                # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so
+                # the declared model still validates.
+                data = TypeAdapter(model).validate_json(text or "null")
+            except ValidationError as e:
+                unexpected_body = BirthdayAppClientUnexpectedBody(
+                    status=status,
+                    data=self._parse_json_or_none(text),
+                    model=model,
+                    validation_error=e,
+                    response=response,
+                )
+                if raise_if_unexpected_response:
+                    raise BirthdayAppClientUnexpectedBodyError(
+                        result=unexpected_body
+                    ) from e
+                return unexpected_body
 
         result = BirthdayAppClientResult(
             status=status,
@@ -330,6 +502,29 @@ class BirthdayAppClient:
             )
         return result
 
+    @staticmethod
+    def _parse_status(status_code: int) -> HTTPStatus | None:
+        try:
+            return HTTPStatus(status_code)
+        except ValueError:
+            return None  # Non-standard status code (e.g. 499 or 520).
+
+    @staticmethod
+    def _read_text(response: Response) -> str:
+        # Unlike iterating, reading retains the body (e.g. for `response.text`).
+        try:
+            response.read()
+        finally:
+            response.close()
+        return response.text
+
+    @classmethod
+    def _parse_json_or_none(cls, text: str) -> JsonValue:
+        try:
+            return cls._json_value_adapter.validate_json(text)
+        except ValidationError:
+            return None
+
     @classmethod
     def _build_streaming_data(
         cls,
@@ -338,6 +533,7 @@ class BirthdayAppClient:
         ],
         response: Response,
         model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
     ) -> Iterator[Any]:
         if streaming_kind == "raw_bytes":
             return cls._close_response_after(response, response.iter_bytes())
@@ -345,9 +541,12 @@ class BirthdayAppClient:
             return cls._close_response_after(response, response.iter_text())
         if streaming_kind == "json_lines":
             return cls._close_response_after(
-                response, cls._iter_json_lines(response, model)
+                response,
+                cls._iter_json_lines(response, model, raise_if_unexpected_response),
             )
-        return cls._close_response_after(response, cls._iter_sse(response, model))
+        return cls._close_response_after(
+            response, cls._iter_sse(response, model, raise_if_unexpected_response)
+        )
 
     @staticmethod
     def _close_response_after(
@@ -358,27 +557,69 @@ class BirthdayAppClient:
         finally:
             response.close()
 
-    @staticmethod
+    @classmethod
     def _iter_json_lines(
+        cls,
         response: Response,
         model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
     ) -> Iterator[Any]:
         adapter = TypeAdapter(model)
         for part in response.iter_lines():
             if part:
-                yield adapter.validate_json(part)
+                yield cls._validate_stream_item(
+                    adapter, part, model, raise_if_unexpected_response
+                )
 
     @classmethod
     def _iter_sse(
         cls,
         response: Response,
         model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
     ) -> Iterator[Any]:
         adapter = TypeAdapter(model)
         for fields in cls._iter_sse_event_fields(response.iter_lines()):
-            if "data" in fields:
-                fields = {**fields, "data": adapter.validate_json(fields["data"])}
-            yield BirthdayAppClientSSE[model].model_validate(fields)
+            yield cls._build_sse(adapter, fields, model, raise_if_unexpected_response)
+
+    @classmethod
+    def _validate_stream_item(
+        cls,
+        adapter: TypeAdapter[Any],
+        raw: str,
+        model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
+    ) -> Any:  # noqa: ANN401
+        try:
+            return adapter.validate_json(raw)
+        except ValidationError as e:
+            item = BirthdayAppClientUnexpectedStreamItem(
+                data=cls._parse_json_or_none(raw),
+                raw=raw,
+                model=model,
+                validation_error=e,
+            )
+            if raise_if_unexpected_response:
+                raise BirthdayAppClientUnexpectedStreamItemError(result=item) from e
+            return item
+
+    @classmethod
+    def _build_sse(
+        cls,
+        adapter: TypeAdapter[Any],
+        fields: Mapping[str, Any],
+        model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
+    ) -> BirthdayAppClientSSE[Any]:
+        event = BirthdayAppClientSSE[model].model_validate({**fields, "data": None})
+        if "data" not in fields:
+            return event
+        # Attach the data without revalidating it (Pydantic couldn't validate an
+        # unexpected stream item anyway).
+        data = cls._validate_stream_item(
+            adapter, fields["data"], model, raise_if_unexpected_response
+        )
+        return event.model_copy(update={"data": data})
 
     @classmethod
     def _iter_sse_event_fields(
@@ -442,6 +683,7 @@ class BirthdayAppClient:
         data: BirthdayData,
         *,
         raise_if_not_default_status: Literal[True],
+        raise_if_unexpected_response: Literal[True] = True,
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]: ...
     @overload
@@ -449,7 +691,21 @@ class BirthdayAppClient:
         self,
         data: BirthdayData,
         *,
+        raise_if_not_default_status: Literal[True],
+        raise_if_unexpected_response: Literal[False],
+        client_exts: BirthdayAppClientExtensions | None = None,
+    ) -> (
+        BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]
+        | BirthdayAppClientUnexpectedStatus
+        | BirthdayAppClientUnexpectedBody
+    ): ...
+    @overload
+    def register_birthday(
+        self,
+        data: BirthdayData,
+        *,
         raise_if_not_default_status: Literal[False] = False,
+        raise_if_unexpected_response: Literal[True] = True,
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]
@@ -458,11 +714,29 @@ class BirthdayAppClient:
             BirthdayAppClientHTTPValidationError,
         ]
     ): ...
+    @overload
+    def register_birthday(
+        self,
+        data: BirthdayData,
+        *,
+        raise_if_not_default_status: Literal[False] = False,
+        raise_if_unexpected_response: Literal[False],
+        client_exts: BirthdayAppClientExtensions | None = None,
+    ) -> (
+        BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]
+        | BirthdayAppClientResult[
+            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
+            BirthdayAppClientHTTPValidationError,
+        ]
+        | BirthdayAppClientUnexpectedStatus
+        | BirthdayAppClientUnexpectedBody
+    ): ...
     def register_birthday(
         self,
         data: BirthdayData,
         *,
         raise_if_not_default_status: bool = False,
+        raise_if_unexpected_response: bool = True,
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> Any:
         return self._route_handler(
@@ -477,6 +751,7 @@ class BirthdayAppClient:
                 "data": data,
             },
             raise_if_not_default_status=raise_if_not_default_status,
+            raise_if_unexpected_response=raise_if_unexpected_response,
             client_exts=client_exts,
         )
 
@@ -486,6 +761,7 @@ class BirthdayAppClient:
         name: str,
         *,
         raise_if_not_default_status: Literal[True],
+        raise_if_unexpected_response: Literal[True] = True,
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]: ...
     @overload
@@ -493,7 +769,21 @@ class BirthdayAppClient:
         self,
         name: str,
         *,
+        raise_if_not_default_status: Literal[True],
+        raise_if_unexpected_response: Literal[False],
+        client_exts: BirthdayAppClientExtensions | None = None,
+    ) -> (
+        BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]
+        | BirthdayAppClientUnexpectedStatus
+        | BirthdayAppClientUnexpectedBody
+    ): ...
+    @overload
+    def get_birthday(
+        self,
+        name: str,
+        *,
         raise_if_not_default_status: Literal[False] = False,
+        raise_if_unexpected_response: Literal[True] = True,
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]
@@ -503,11 +793,30 @@ class BirthdayAppClient:
             BirthdayAppClientHTTPValidationError,
         ]
     ): ...
+    @overload
+    def get_birthday(
+        self,
+        name: str,
+        *,
+        raise_if_not_default_status: Literal[False] = False,
+        raise_if_unexpected_response: Literal[False],
+        client_exts: BirthdayAppClientExtensions | None = None,
+    ) -> (
+        BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]
+        | BirthdayAppClientResult[Literal[HTTPStatus.NOT_FOUND], GetBirthdayError]
+        | BirthdayAppClientResult[
+            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
+            BirthdayAppClientHTTPValidationError,
+        ]
+        | BirthdayAppClientUnexpectedStatus
+        | BirthdayAppClientUnexpectedBody
+    ): ...
     def get_birthday(
         self,
         name: str,
         *,
         raise_if_not_default_status: bool = False,
+        raise_if_unexpected_response: bool = True,
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> Any:
         return self._route_handler(
@@ -523,5 +832,6 @@ class BirthdayAppClient:
                 "name": name,
             },
             raise_if_not_default_status=raise_if_not_default_status,
+            raise_if_unexpected_response=raise_if_unexpected_response,
             client_exts=client_exts,
         )

@@ -102,6 +102,20 @@ def _generate(
             ),
         ),
     ] = False,
+    raise_if_unexpected_response: Annotated[
+        bool,
+        Option(
+            " /--no-raise-if-unexpected-response",
+            help=(
+                "Client methods will return unexpected responses (with a status code "
+                "the endpoint does not declare or with a body that does not match the "
+                "declared model) by default instead of raising an exception. With or "
+                "without option, this can also be controlled at each method call with "
+                "the [bold]raise_if_unexpected_response[/bold] parameter."
+            ),
+            show_default=False,
+        ),
+    ] = True,
 ) -> None:
     """
     Generate a new client for your FastAPI app.
@@ -119,6 +133,7 @@ def _generate(
             import_barrier=import_barrier,
             import_client_base=import_client_base,
             raise_if_not_default_status=raise_if_not_default_status,
+            raise_if_unexpected_response=raise_if_unexpected_response,
         )
     except BaseException as e:
         print(f"[red]Error[/red]: {e}", file=sys.stderr)

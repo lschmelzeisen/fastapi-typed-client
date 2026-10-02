@@ -44,6 +44,7 @@ fastapi-typed-client generate --help
 Generates a client for your FastAPI app that:
 
 - Has **full type annotations** for all endpoint parameters and combinations of status codes and response models
+- Detects **unexpected responses** (undeclared status codes or bodies that do not match the declared model) and raises dedicated exceptions or returns them as typed results
 - Uses the **types and Pydantic models defined in your app code**
 - Can be either **sync or async** (via the `--async` CLI option)
 - Support for **path**, **query**, **header**, **body**, **form**, and **file parameters** (`UploadFile`/`File()`/`Form()` endpoints are sent as `multipart/form-data` or form-urlencoded; plus experimental support for **cookie parameters**)
@@ -217,6 +218,7 @@ The following options are available (see also `fastapi-typed-client generate --h
 - `--import-barrier MODULE`:  Module path(s) in format `module.submodule` to set as import barriers. Forces types in submodules to be imported through the barrier rather than directly. Can be specified multiple times.
 - `--import-client-base`: Import the client base from `fastapi_typed_client.client` instead of writing it to the output file. Intended when working with multiple generated clients at once.
 - `--raise-if-not-default-status`: Client methods will raise an exception by default if the respective endpoint does not return its default status code. With or without option, this can also be controlled at each method call with the `raise_if_not_default_status` parameter.  
+- `--no-raise-if-unexpected-response`: Client methods will return unexpected responses (with a status code the endpoint does not declare or with a body that does not match the declared model) by default instead of raising an exception. With or without option, this can also be controlled at each method call with the `raise_if_unexpected_response` parameter.
 
 Alternatively, for programmatic access, the function `generate_fastapi_typed_client()`, which can be imported from `fastapi_typed_client`, exposes the same functionality as the CLI command. Its parameters correspond one-to-one to the CLI options.
 
@@ -245,6 +247,8 @@ with FastAPIClient.from_app(app) as client:
 
 This approach uses FastAPI's [TestClient](https://fastapi.tiangolo.com/reference/testclient/) under the hood and thus triggers the [lifespan events](https://fastapi.tiangolo.com/advanced/testing-events/) of your FastAPI app. Because FastAPI does not have an async `TestClient`, this is _not_ the case if you use `--async`. Use something like [asgi-lifespan](https://github.com/florimondmanca/asgi-lifespan)'s `LifespanManager` to trigger lifespan events yourself if needed.
 
+Note that `.from_app()` re-raises unhandled exceptions from your endpoints instead of returning a `500 Internal Server Error`. To receive a `500` instead, pass e.g. `TestClient(app, raise_server_exceptions=False)` (or `AsyncClient(transport=ASGITransport(app, raise_app_exceptions=False))` with `--async`) to the client's constructor.
+
 ### Using a generated client
 
 The generated `FastAPIClient` will contain one generated method for each endpoint defined by your FastAPI app.
@@ -261,7 +265,7 @@ def endpoint(
     ...
 ```
 
-The generated client will contain a method similar to the following:
+The generated client will contain a method similar to the following (plus `@overload`s that adjust the return type depending on `raise_if_not_default_status` and `raise_if_unexpected_response`):
 
 ```python
 from fastapi_app import BazModel, ResponseModel
@@ -276,6 +280,7 @@ class FastAPIClient:
         baz: BazModel,
         *,
         raise_if_not_default_status: bool = False,
+        raise_if_unexpected_response: bool = True,
         client_exts: FastAPIClientExtensions | None = None
     ) -> FastAPIClientResult[Literal[HTTPStatus.OK], ResponseModel]:
         ...
@@ -285,7 +290,28 @@ With an [client instance](#instantiating-a-generated-client) you can then just c
 
 For endpoints that can return errors (either because they define errors as [additional responses](https://fastapi.tiangolo.com/advanced/additional-responses/) or because they take parameters which can result in a Pydantic `ValidationError`) the return type of the generated endpoint method will be a union of all status codes with their respective response models.
 
-If your set the `raise_if_not_default_status` parameter to `True` or use `--raise-if-not-default-status` when generating your client, the return type will just be the default status code (i.e., `200 Ok` or the one defined via `status_code` in the endpoint's decorator) with its response model. Should the endpoint return a different status code, a `FastAPIClientNotDefaultStatusError` will be raised, which contains the response status code and deserialized data.
+If you set the `raise_if_not_default_status` parameter to `True` or use `--raise-if-not-default-status` when generating your client, the return type will just be the default status code (i.e., `200 Ok` or the one defined via `status_code` in the endpoint's decorator) with its response model. Should the endpoint return a different status code, a `FastAPIClientNotDefaultStatusError` will be raised, which contains the response status code and deserialized data.
+
+Responses that don't match the endpoint's declaration are _unexpected_: a status code the endpoint does not declare (e.g. a `500 Internal Server Error`, or a status from a middleware or reverse proxy), or a declared status code whose body does not validate against its model. By default, these raise `FastAPIClientUnexpectedStatusError` or `FastAPIClientUnexpectedBodyError`, respectively (never `FastAPIClientNotDefaultStatusError`).
+
+If you set the `raise_if_unexpected_response` parameter to `False` or use `--no-raise-if-unexpected-response`, unexpected responses are instead returned as `FastAPIClientUnexpectedStatus` or `FastAPIClientUnexpectedBody` and added to the method's return type. Since these can carry any status, comparing `result.status` no longer narrows `result.data`, so exclude them via `isinstance()` first:
+
+```python
+from fastapi_app import BazModel, ResponseModel
+from fastapi_client import FastAPIClientUnexpectedResponse
+from http import HTTPStatus
+from typing import assert_type
+
+result = client.endpoint(
+    foo="foo", bar=123, baz=BazModel(), raise_if_unexpected_response=False
+)
+if isinstance(result, FastAPIClientUnexpectedResponse):
+    print(result.response.status_code, result.data)  # data is the body parsed as JSON.
+elif result.status == HTTPStatus.OK:
+    assert_type(result.data, ResponseModel)
+```
+
+To type responses your app produces outside of routes (e.g. a middleware answering `400` with a problem-details body), declare them via `FastAPI(responses={400: {"model": Problem}})` or `APIRouter(responses=...)`. FastAPI merges these into every route's responses.
 
 There is experimental support for streaming endpoints. The following patterns are detected automatically from FastAPI's route metadata, and the streaming type is only applied to the default response of an endpoint (additional responses still produce regular `data` for their respective status codes):
 
@@ -310,6 +336,8 @@ There is experimental support for streaming endpoints. The following patterns ar
       handle(chunk)
   ```
 
+Items of JSON Lines streams and the `data` of SSE events are validated against the declared model while iterating. By default, an item that does not validate (or is not valid JSON) raises a `FastAPIClientUnexpectedStreamItemError` during iteration (i.e., after the endpoint method has returned) and closes the stream. With `raise_if_unexpected_response=False`, such items are instead yielded as `FastAPIClientUnexpectedStreamItem` (for SSE, as the `data` of the respective `FastAPIClientSSE`, keeping the event's other fields) and iteration continues, so the item types become `T | FastAPIClientUnexpectedStreamItem`. Raw bytes/string streams are not validated. Streaming endpoints that return a status code other than the default are read fully and behave like non-streaming endpoints.
+
 See the corresponding tests for end-to-end examples ([test_streaming_json_response.py](./tests/test_core/test_streaming_json_response.py), [test_stream_json_lines.py](./tests/test_core/test_stream_json_lines.py), [test_stream_sse.py](./tests/test_core/test_stream_sse.py), [test_stream_raw.py](./tests/test_core/test_stream_raw.py)).
 
 ### Auxiliary classes
@@ -327,14 +355,51 @@ Instance attributes:
 - `model: type[Model]`: The type used to deserialize the response data
 - `response: Response`: The raw `httpx.Response` object
 
+#### `FastAPIClientUnexpectedStatus`, `FastAPIClientUnexpectedBody`, and `FastAPIClientUnexpectedStreamItem`
+
+Returned (or yielded, for stream items) instead of raised when using `raise_if_unexpected_response=False` or `--no-raise-if-unexpected-response`. `FastAPIClientUnexpectedResponse` is the union of all three and can be used with `isinstance()`.
+
+`FastAPIClientUnexpectedStatus` (status code the endpoint does not declare) instance attributes:
+
+- `status: HTTPStatus | None`: The [`http.HTTPStatus`](https://docs.python.org/3/library/http.html#http.HTTPStatus) of the response (or `None` for non-standard status codes like `499` or `520`, see `response.status_code` for the raw code)
+- `data: JsonValue`: The response body parsed as JSON (or `None` if empty or not valid JSON)
+- `response: Response`: The raw `httpx.Response` object
+
+`FastAPIClientUnexpectedBody` (declared status code with a body that does not validate) instance attributes:
+
+- `status: HTTPStatus`: The [`http.HTTPStatus`](https://docs.python.org/3/library/http.html#http.HTTPStatus) of the response
+- `data: JsonValue`: The response body parsed as JSON (or `None` if empty or not valid JSON)
+- `model: type[Any]`: The declared model the response body failed to validate against
+- `validation_error: ValidationError`: The Pydantic `ValidationError` raised during validation
+- `response: Response`: The raw `httpx.Response` object
+
+`FastAPIClientUnexpectedStreamItem` (JSON Lines item or SSE `data` that does not validate; for SSE, yielded as `data` of a `FastAPIClientSSE`) instance attributes:
+
+- `data: JsonValue`: The stream item parsed as JSON (or `None` if not valid JSON)
+- `raw: str`: The raw JSON line or SSE `data` of the stream item
+- `model: type[Any]`: The declared model the stream item failed to validate against
+- `validation_error: ValidationError`: The Pydantic `ValidationError` raised during validation
+
+#### `FastAPIClientError`
+
+Base class of all exceptions raised by generated clients, i.e., of `FastAPIClientNotDefaultStatusError` and `FastAPIClientUnexpectedResponseError`.
+
 #### `FastAPIClientNotDefaultStatusError`
   
-Exception raised when using `raise_if_not_default_status=True` or `--raise-if-not-default-status` and an endpoint returns a non-default status code.
+Exception raised when using `raise_if_not_default_status=True` or `--raise-if-not-default-status` and an endpoint returns a declared but non-default status code.
 
 Instance attributes:
 
 - `default_status: HTTPStatus`: The expected status code
 - `result: FastAPIClientResult`: The actual result received
+
+#### `FastAPIClientUnexpectedResponseError`
+
+Exception raised when using `raise_if_unexpected_response=True` (the default) and an endpoint returns an unexpected response. Specifically, one of its subclasses is raised: `FastAPIClientUnexpectedStatusError`, `FastAPIClientUnexpectedBodyError` (chained from the Pydantic `ValidationError`), or `FastAPIClientUnexpectedStreamItemError` (chained from the Pydantic `ValidationError`, raised while iterating over a stream).
+
+Instance attributes:
+
+- `result: FastAPIClientUnexpectedResponse`: The unexpected response received (typed as `FastAPIClientUnexpectedStatus`, `FastAPIClientUnexpectedBody`, or `FastAPIClientUnexpectedStreamItem` on the respective subclass)
 
 #### `FastAPIClientHTTPValidationError` and `FastAPIClientValidationError`
   

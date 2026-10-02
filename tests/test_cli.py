@@ -25,6 +25,7 @@ def test_option_defaults(mock_generate_fastapi_typed_client: MockType) -> None:
         import_barrier=None,
         import_client_base=False,
         raise_if_not_default_status=False,
+        raise_if_unexpected_response=True,
     )
 
 
@@ -41,6 +42,7 @@ def test_option_values(mock_generate_fastapi_typed_client: MockType) -> None:
             *("--import-barrier", "quux"),
             "--import-client-base",
             "--raise-if-not-default-status",
+            "--no-raise-if-unexpected-response",
         ),
     )
     mock_generate_fastapi_typed_client.assert_called_once_with(
@@ -51,6 +53,7 @@ def test_option_values(mock_generate_fastapi_typed_client: MockType) -> None:
         import_barrier=["baz", "quux"],
         import_client_base=True,
         raise_if_not_default_status=True,
+        raise_if_unexpected_response=False,
     )
 
 

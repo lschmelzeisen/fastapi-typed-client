@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased](https://github.com/lschmelzeisen/fastapi-typed-client/compare/v0.6.0...HEAD)
 
+### Added
+
+- Handling of unexpected responses, i.e., a status code that the route does not declare (e.g. from a middleware, a reverse proxy, or a `500 Internal Server Error`; previously, this raised a bare `KeyError`, see [#1](https://github.com/lschmelzeisen/fastapi-typed-client/issues/1)) or a body that does not validate against the declared model:
+  - By default, these raise `FastAPIClientUnexpectedStatusError` or `FastAPIClientUnexpectedBodyError`, and invalid items of JSON Lines and SSE streams raise `FastAPIClientUnexpectedStreamItemError` during iteration. All three subclass the new `FastAPIClientUnexpectedResponseError`, whose `result` holds the unexpected response.
+  - With the new `raise_if_unexpected_response=False` parameter of generated client methods (or `--no-raise-if-unexpected-response` when generating), they are instead returned (or yielded) as the new `FastAPIClientUnexpectedStatus`, `FastAPIClientUnexpectedBody`, or `FastAPIClientUnexpectedStreamItem` (union alias `FastAPIClientUnexpectedResponse`), which are added to the return types.
+  - Either way, they take precedence over `raise_if_not_default_status`.
+- New exception base class `FastAPIClientError`.
+
+### Changed
+
+- Bodies that do not validate against the declared model (including stream items) now raise `FastAPIClientUnexpectedBodyError` (or `FastAPIClientUnexpectedStreamItemError`) instead of Pydantic's `ValidationError`, which is still available as `result.validation_error`.
+- `FastAPIClientNotDefaultStatusError` now subclasses `FastAPIClientError`, and its attributes are now read-only.
+- Generated client methods now always have overloads (also for routes with a single response).
+
 ### Fixed
 
 - On streaming routes, responses with a non-default status code now retain their body (previously, `response.text` raised `ResponseNotRead`).

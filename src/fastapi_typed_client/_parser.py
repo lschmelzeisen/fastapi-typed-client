@@ -42,6 +42,7 @@ _DISALLOWED_PARAM_NAMES = {
     "self",
     "client_exts",
     "raise_if_not_default_status",
+    "raise_if_unexpected_response",
     "HTTPMethod",
     "HTTPStatus",
 }

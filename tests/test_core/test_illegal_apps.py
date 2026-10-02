@@ -68,6 +68,17 @@ def test_route_with_multiple_disallowed_param_name() -> None:
         generate_fastapi_typed_client(app)
 
 
+def test_route_with_raise_if_unexpected_response_param_name() -> None:
+    app = FastAPI()
+
+    @app.get("/")
+    def endpoint(raise_if_unexpected_response: bool) -> None:
+        pass
+
+    with pytest.raises(RuntimeError, match="raise_if_unexpected_response"):
+        generate_fastapi_typed_client(app)
+
+
 def test_shared_param_with_incompatible_types() -> None:
     app = FastAPI()
 

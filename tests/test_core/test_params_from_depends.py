@@ -184,6 +184,7 @@ def test_shared_path_param_across_sub_dependencies(
             assert list(endpoint_signature.parameters) == [
                 "param",
                 "raise_if_not_default_status",
+                "raise_if_unexpected_response",
                 "client_exts",
             ]
             assert endpoint_signature.parameters["param"].default is Parameter.empty
@@ -217,6 +218,7 @@ async def test_shared_path_param_across_sub_dependencies_async(
             assert list(endpoint_signature.parameters) == [
                 "param",
                 "raise_if_not_default_status",
+                "raise_if_unexpected_response",
                 "client_exts",
             ]
             assert endpoint_signature.parameters["param"].default is Parameter.empty

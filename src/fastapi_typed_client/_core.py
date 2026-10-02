@@ -10,6 +10,7 @@ from ._utils import load_import, to_snake_case, to_upper_camel_case
 from .client import (
     FastAPIClientAsyncBase,
     FastAPIClientBase,
+    FastAPIClientError,
     FastAPIClientExtensions,
     FastAPIClientFile,
     FastAPIClientHTTPValidationError,
@@ -17,6 +18,13 @@ from .client import (
     FastAPIClientResult,
     FastAPIClientSecurityParam,
     FastAPIClientSSE,
+    FastAPIClientUnexpectedBody,
+    FastAPIClientUnexpectedBodyError,
+    FastAPIClientUnexpectedResponseError,
+    FastAPIClientUnexpectedStatus,
+    FastAPIClientUnexpectedStatusError,
+    FastAPIClientUnexpectedStreamItem,
+    FastAPIClientUnexpectedStreamItemError,
     FastAPIClientValidationError,
 )
 
@@ -24,9 +32,18 @@ from .client import (
 _RESERVED_TITLES = (
     FastAPIClientExtensions.__name__,
     FastAPIClientResult.__name__,
+    FastAPIClientUnexpectedStatus.__name__,
+    FastAPIClientUnexpectedBody.__name__,
+    FastAPIClientUnexpectedStreamItem.__name__,
+    "FastAPIClientUnexpectedResponse",
     FastAPIClientValidationError.__name__,
     FastAPIClientHTTPValidationError.__name__,
+    FastAPIClientError.__name__,
     FastAPIClientNotDefaultStatusError.__name__,
+    FastAPIClientUnexpectedResponseError.__name__,
+    FastAPIClientUnexpectedStatusError.__name__,
+    FastAPIClientUnexpectedBodyError.__name__,
+    FastAPIClientUnexpectedStreamItemError.__name__,
     FastAPIClientSecurityParam.__name__,
     FastAPIClientSSE.__name__,
     FastAPIClientFile.__name__,
@@ -45,6 +62,7 @@ def generate_fastapi_typed_client(
     import_barrier: str | Iterable[str] | None = None,
     import_client_base: bool = False,
     raise_if_not_default_status: bool = False,
+    raise_if_unexpected_response: bool = True,
     _add_test_markers: bool = False,
 ) -> None:
     app = (
@@ -82,6 +100,7 @@ def generate_fastapi_typed_client(
         import_barrier,
         import_client_base,
         raise_if_not_default_status,
+        raise_if_unexpected_response,
         _add_test_markers,
     ).generate(routes)
 

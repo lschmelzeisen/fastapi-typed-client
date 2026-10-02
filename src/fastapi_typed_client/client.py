@@ -10,7 +10,7 @@ from collections.abc import (
 )
 from contextlib import asynccontextmanager, contextmanager
 from http import HTTPMethod, HTTPStatus
-from typing import Any, Literal, NamedTuple, Self, TypedDict
+from typing import Any, Literal, NamedTuple, Self, TypedDict, override
 from warnings import warn
 
 from fastapi import FastAPI, UploadFile
@@ -25,11 +25,12 @@ from httpx2 import (
     Timeout,
 )
 from httpx2._types import FileTypes
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 # List all imports of this file for usage by _generator.py here.
 _IMPORTS = [
     Any,
+    ConfigDict,
     HTTPMethod,
     HTTPStatus,
     Literal,
@@ -44,6 +45,7 @@ _IMPORTS = [
     TypedDict,
     b64encode,
     jsonable_encoder,
+    override,
     warn,
 ]
 _IMPORTS_VALIDATION_ERROR = [BaseModel, Sequence]
@@ -77,6 +79,34 @@ class FastAPIClientResult[Status: HTTPStatus, Model](NamedTuple):
     response: Response
 
 
+class FastAPIClientUnexpectedStatus(NamedTuple):
+    status: HTTPStatus | None
+    data: JsonValue
+    response: Response
+
+
+class FastAPIClientUnexpectedBody(NamedTuple):
+    status: HTTPStatus
+    data: JsonValue
+    model: type[Any]
+    validation_error: ValidationError
+    response: Response
+
+
+class FastAPIClientUnexpectedStreamItem(NamedTuple):
+    data: JsonValue
+    raw: str
+    model: type[Any]
+    validation_error: ValidationError
+
+
+FastAPIClientUnexpectedResponse = (
+    FastAPIClientUnexpectedStatus
+    | FastAPIClientUnexpectedBody
+    | FastAPIClientUnexpectedStreamItem
+)
+
+
 class FastAPIClientValidationError(BaseModel):
     loc: Sequence[str | int]
     msg: str
@@ -87,7 +117,11 @@ class FastAPIClientHTTPValidationError(BaseModel):
     detail: Sequence[FastAPIClientValidationError]
 
 
-class FastAPIClientNotDefaultStatusError(Exception):
+class FastAPIClientError(Exception):
+    pass
+
+
+class FastAPIClientNotDefaultStatusError(FastAPIClientError):
     def __init__(
         self,
         *,
@@ -98,8 +132,87 @@ class FastAPIClientNotDefaultStatusError(Exception):
             f"Expected default status {default_status.value} {default_status.phrase}, "
             f"but received {result.status.value} {result.status.phrase}."
         )
-        self.default_status = default_status
-        self.result = result
+        self._default_status = default_status
+        self._result = result
+
+    @property
+    def default_status(self) -> HTTPStatus:
+        return self._default_status
+
+    @property
+    def result(self) -> FastAPIClientResult[HTTPStatus, Any]:
+        return self._result
+
+
+class FastAPIClientUnexpectedResponseError(FastAPIClientError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        result: FastAPIClientUnexpectedResponse,
+    ) -> None:
+        super().__init__(message)
+        self._result = result
+
+    @property
+    def result(self) -> FastAPIClientUnexpectedResponse:
+        return self._result
+
+    @staticmethod
+    def _model_name(model: type[Any]) -> str:
+        # Despite being typed as `type[Any]`, models aren't necessarily classes (e.g.
+        # `list[int]` or `int | None`).
+        return model.__name__ if isinstance(model, type) else str(model)
+
+
+class FastAPIClientUnexpectedStatusError(FastAPIClientUnexpectedResponseError):
+    def __init__(self, *, result: FastAPIClientUnexpectedStatus) -> None:
+        status = (
+            f"{result.status.value} {result.status.phrase}"
+            if result.status is not None
+            else f"{result.response.status_code} (non-standard)"
+        )
+        super().__init__(
+            f"Received status {status}, which the route does not declare.",
+            result=result,
+        )
+        self._status_result = result
+
+    @property
+    @override
+    def result(self) -> FastAPIClientUnexpectedStatus:
+        return self._status_result
+
+
+class FastAPIClientUnexpectedBodyError(FastAPIClientUnexpectedResponseError):
+    def __init__(self, *, result: FastAPIClientUnexpectedBody) -> None:
+        super().__init__(
+            f"Received status {result.status.value} {result.status.phrase} with a "
+            "body that does not match the declared model "
+            f"`{self._model_name(result.model)}`.",
+            result=result,
+        )
+        self._body_result = result
+
+    @property
+    @override
+    def result(self) -> FastAPIClientUnexpectedBody:
+        return self._body_result
+
+
+class FastAPIClientUnexpectedStreamItemError(FastAPIClientUnexpectedResponseError):
+    def __init__(self, *, result: FastAPIClientUnexpectedStreamItem) -> None:
+        super().__init__(
+            "Received a stream item that does not match the declared model "
+            f"`{self._model_name(result.model)}`.",
+            result=result,
+        )
+        self._stream_item_result = result
+
+    @property
+    @override
+    def result(self) -> FastAPIClientUnexpectedStreamItem:
+        return self._stream_item_result
 
 
 class FastAPIClientSecurityParam(NamedTuple):
@@ -115,6 +228,10 @@ class FastAPIClientSecurityParam(NamedTuple):
 
 
 class FastAPIClientSSE[Data](ServerSentEvent):
+    # Allows evaluating `FastAPIClientSSE[T | FastAPIClientUnexpectedStreamItem]` (which
+    # holds a `ValidationError`) at runtime, e.g. in `assert_type()` or `cast()`.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     data: Data | None = None
 
 
@@ -122,6 +239,8 @@ FASTAPI_CLIENT_NOT_REQUIRED: Any = ...
 
 
 class FastAPIClientBase:
+    _json_value_adapter = TypeAdapter[JsonValue](JsonValue)
+
     def __init__(self, client: Client) -> None:
         self.client = client
 
@@ -243,8 +362,13 @@ class FastAPIClientBase:
         ]
         | None = None,
         raise_if_not_default_status: bool = False,
+        raise_if_unexpected_response: bool = True,
         client_exts: FastAPIClientExtensions | None = None,
-    ) -> FastAPIClientResult[HTTPStatus, Any]:
+    ) -> (
+        FastAPIClientResult[HTTPStatus, Any]
+        | FastAPIClientUnexpectedStatus
+        | FastAPIClientUnexpectedBody
+    ):
         if not client_exts:
             client_exts = {}
 
@@ -317,24 +441,68 @@ class FastAPIClientBase:
             )
 
         response = self.client.send(request, stream=streaming_kind is not None)
-        status = HTTPStatus(response.status_code)
+        return self._handle_response(
+            response,
+            default_status=default_status,
+            models=models,
+            streaming_kind=streaming_kind,
+            raise_if_not_default_status=raise_if_not_default_status,
+            raise_if_unexpected_response=raise_if_unexpected_response,
+        )
+
+    def _handle_response(
+        self,
+        response: Response,
+        *,
+        default_status: HTTPStatus,
+        models: Mapping[HTTPStatus, Any],
+        streaming_kind: Literal[
+            "json_lines", "server_sent_events", "raw_bytes", "raw_str"
+        ]
+        | None,
+        raise_if_not_default_status: bool,
+        raise_if_unexpected_response: bool,
+    ) -> (
+        FastAPIClientResult[HTTPStatus, Any]
+        | FastAPIClientUnexpectedStatus
+        | FastAPIClientUnexpectedBody
+    ):
+        status = self._parse_status(response.status_code)
+        if status is None or status not in models:
+            text = self._read_text(response)
+            unexpected_status = FastAPIClientUnexpectedStatus(
+                status=status, data=self._parse_json_or_none(text), response=response
+            )
+            if raise_if_unexpected_response:
+                raise FastAPIClientUnexpectedStatusError(result=unexpected_status)
+            return unexpected_status
 
         model = models[status]
         if streaming_kind is not None and status == default_status:
-            data = self._build_streaming_data(streaming_kind, response, model)
-        elif streaming_kind is not None:
-            # Streaming endpoint returned a non-default status (typically a JSON
-            # error body). Read it (unlike iterating, this retains the body, e.g. for
-            # `response.text`), then release the stream-mode response.
-            try:
-                response.read()
-            finally:
-                response.close()
-            data = TypeAdapter(model).validate_json(response.text or "null")
+            data = self._build_streaming_data(
+                streaming_kind, response, model, raise_if_unexpected_response
+            )
         else:
-            # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so the
-            # declared model still validatess.
-            data = TypeAdapter(model).validate_json(response.text or "null")
+            # Streaming endpoints that return a non-default status (typically a JSON
+            # error body) are read fully, just like non-streaming endpoints.
+            text = self._read_text(response)
+            try:
+                # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so
+                # the declared model still validates.
+                data = TypeAdapter(model).validate_json(text or "null")
+            except ValidationError as e:
+                unexpected_body = FastAPIClientUnexpectedBody(
+                    status=status,
+                    data=self._parse_json_or_none(text),
+                    model=model,
+                    validation_error=e,
+                    response=response,
+                )
+                if raise_if_unexpected_response:
+                    raise FastAPIClientUnexpectedBodyError(
+                        result=unexpected_body
+                    ) from e
+                return unexpected_body
 
         result = FastAPIClientResult(
             status=status,
@@ -348,6 +516,29 @@ class FastAPIClientBase:
             )
         return result
 
+    @staticmethod
+    def _parse_status(status_code: int) -> HTTPStatus | None:
+        try:
+            return HTTPStatus(status_code)
+        except ValueError:
+            return None  # Non-standard status code (e.g. 499 or 520).
+
+    @staticmethod
+    def _read_text(response: Response) -> str:
+        # Unlike iterating, reading retains the body (e.g. for `response.text`).
+        try:
+            response.read()
+        finally:
+            response.close()
+        return response.text
+
+    @classmethod
+    def _parse_json_or_none(cls, text: str) -> JsonValue:
+        try:
+            return cls._json_value_adapter.validate_json(text)
+        except ValidationError:
+            return None
+
     @classmethod
     def _build_streaming_data(
         cls,
@@ -356,6 +547,7 @@ class FastAPIClientBase:
         ],
         response: Response,
         model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
     ) -> Iterator[Any]:
         if streaming_kind == "raw_bytes":
             return cls._close_response_after(response, response.iter_bytes())
@@ -363,9 +555,12 @@ class FastAPIClientBase:
             return cls._close_response_after(response, response.iter_text())
         if streaming_kind == "json_lines":
             return cls._close_response_after(
-                response, cls._iter_json_lines(response, model)
+                response,
+                cls._iter_json_lines(response, model, raise_if_unexpected_response),
             )
-        return cls._close_response_after(response, cls._iter_sse(response, model))
+        return cls._close_response_after(
+            response, cls._iter_sse(response, model, raise_if_unexpected_response)
+        )
 
     @staticmethod
     def _close_response_after(
@@ -376,27 +571,69 @@ class FastAPIClientBase:
         finally:
             response.close()
 
-    @staticmethod
+    @classmethod
     def _iter_json_lines(
+        cls,
         response: Response,
         model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
     ) -> Iterator[Any]:
         adapter = TypeAdapter(model)
         for part in response.iter_lines():
             if part:
-                yield adapter.validate_json(part)
+                yield cls._validate_stream_item(
+                    adapter, part, model, raise_if_unexpected_response
+                )
 
     @classmethod
     def _iter_sse(
         cls,
         response: Response,
         model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
     ) -> Iterator[Any]:
         adapter = TypeAdapter(model)
         for fields in cls._iter_sse_event_fields(response.iter_lines()):
-            if "data" in fields:
-                fields = {**fields, "data": adapter.validate_json(fields["data"])}
-            yield FastAPIClientSSE[model].model_validate(fields)
+            yield cls._build_sse(adapter, fields, model, raise_if_unexpected_response)
+
+    @classmethod
+    def _validate_stream_item(
+        cls,
+        adapter: TypeAdapter[Any],
+        raw: str,
+        model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
+    ) -> Any:  # noqa: ANN401
+        try:
+            return adapter.validate_json(raw)
+        except ValidationError as e:
+            item = FastAPIClientUnexpectedStreamItem(
+                data=cls._parse_json_or_none(raw),
+                raw=raw,
+                model=model,
+                validation_error=e,
+            )
+            if raise_if_unexpected_response:
+                raise FastAPIClientUnexpectedStreamItemError(result=item) from e
+            return item
+
+    @classmethod
+    def _build_sse(
+        cls,
+        adapter: TypeAdapter[Any],
+        fields: Mapping[str, Any],
+        model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
+    ) -> FastAPIClientSSE[Any]:
+        event = FastAPIClientSSE[model].model_validate({**fields, "data": None})
+        if "data" not in fields:
+            return event
+        # Attach the data without revalidating it (Pydantic couldn't validate an
+        # unexpected stream item anyway).
+        data = cls._validate_stream_item(
+            adapter, fields["data"], model, raise_if_unexpected_response
+        )
+        return event.model_copy(update={"data": data})
 
     @classmethod
     def _iter_sse_event_fields(
@@ -456,6 +693,8 @@ class FastAPIClientBase:
 
 
 class FastAPIClientAsyncBase:
+    _json_value_adapter = TypeAdapter[JsonValue](JsonValue)
+
     def __init__(self, client: AsyncClient) -> None:
         self.client = client
 
@@ -577,8 +816,13 @@ class FastAPIClientAsyncBase:
         ]
         | None = None,
         raise_if_not_default_status: bool = False,
+        raise_if_unexpected_response: bool = True,
         client_exts: FastAPIClientExtensions | None = None,
-    ) -> FastAPIClientResult[HTTPStatus, Any]:
+    ) -> (
+        FastAPIClientResult[HTTPStatus, Any]
+        | FastAPIClientUnexpectedStatus
+        | FastAPIClientUnexpectedBody
+    ):
         if not client_exts:
             client_exts = {}
 
@@ -634,27 +878,68 @@ class FastAPIClientAsyncBase:
             )
 
         response = await self.client.send(request, stream=streaming_kind is not None)
-        status = HTTPStatus(response.status_code)
+        return await self._handle_response(
+            response,
+            default_status=default_status,
+            models=models,
+            streaming_kind=streaming_kind,
+            raise_if_not_default_status=raise_if_not_default_status,
+            raise_if_unexpected_response=raise_if_unexpected_response,
+        )
+
+    async def _handle_response(
+        self,
+        response: Response,
+        *,
+        default_status: HTTPStatus,
+        models: Mapping[HTTPStatus, Any],
+        streaming_kind: Literal[
+            "json_lines", "server_sent_events", "raw_bytes", "raw_str"
+        ]
+        | None,
+        raise_if_not_default_status: bool,
+        raise_if_unexpected_response: bool,
+    ) -> (
+        FastAPIClientResult[HTTPStatus, Any]
+        | FastAPIClientUnexpectedStatus
+        | FastAPIClientUnexpectedBody
+    ):
+        status = self._parse_status(response.status_code)
+        if status is None or status not in models:
+            text = await self._aread_text(response)
+            unexpected_status = FastAPIClientUnexpectedStatus(
+                status=status, data=self._parse_json_or_none(text), response=response
+            )
+            if raise_if_unexpected_response:
+                raise FastAPIClientUnexpectedStatusError(result=unexpected_status)
+            return unexpected_status
 
         model = models[status]
         if streaming_kind is not None and status == default_status:
-            data = self._build_streaming_data(streaming_kind, response, model)
-        elif streaming_kind is not None:
-            # Streaming endpoint returned a non-default status (typically a JSON
-            # error body). Read it (unlike iterating, this retains the body, e.g. for
-            # `response.text`), then release the stream-mode response.
-            try:
-                await response.aread()
-            finally:
-                await response.aclose()
-            data = TypeAdapter(model).validate_json(response.text or "null")
+            data = self._build_streaming_data(
+                streaming_kind, response, model, raise_if_unexpected_response
+            )
         else:
-            text = ""
-            async for part in response.aiter_text():
-                text += part
-            # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so the
-            # declared model still validate.
-            data = TypeAdapter(model).validate_json(text or "null")
+            # Streaming endpoints that return a non-default status (typically a JSON
+            # error body) are read fully, just like non-streaming endpoints.
+            text = await self._aread_text(response)
+            try:
+                # An empty body (e.g. 204 NO_CONTENT) is treated as JSON `null` so
+                # the declared model still validates.
+                data = TypeAdapter(model).validate_json(text or "null")
+            except ValidationError as e:
+                unexpected_body = FastAPIClientUnexpectedBody(
+                    status=status,
+                    data=self._parse_json_or_none(text),
+                    model=model,
+                    validation_error=e,
+                    response=response,
+                )
+                if raise_if_unexpected_response:
+                    raise FastAPIClientUnexpectedBodyError(
+                        result=unexpected_body
+                    ) from e
+                return unexpected_body
 
         result = FastAPIClientResult(
             status=status,
@@ -668,6 +953,29 @@ class FastAPIClientAsyncBase:
             )
         return result
 
+    @staticmethod
+    def _parse_status(status_code: int) -> HTTPStatus | None:
+        try:
+            return HTTPStatus(status_code)
+        except ValueError:
+            return None  # Non-standard status code (e.g. 499 or 520).
+
+    @staticmethod
+    async def _aread_text(response: Response) -> str:
+        # Unlike iterating, reading retains the body (e.g. for `response.text`).
+        try:
+            await response.aread()
+        finally:
+            await response.aclose()
+        return response.text
+
+    @classmethod
+    def _parse_json_or_none(cls, text: str) -> JsonValue:
+        try:
+            return cls._json_value_adapter.validate_json(text)
+        except ValidationError:
+            return None
+
     @classmethod
     def _build_streaming_data(
         cls,
@@ -676,6 +984,7 @@ class FastAPIClientAsyncBase:
         ],
         response: Response,
         model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
     ) -> AsyncIterator[Any]:
         if streaming_kind == "raw_bytes":
             return cls._aclose_response_after(response, response.aiter_bytes())
@@ -683,9 +992,12 @@ class FastAPIClientAsyncBase:
             return cls._aclose_response_after(response, response.aiter_text())
         if streaming_kind == "json_lines":
             return cls._aclose_response_after(
-                response, cls._aiter_json_lines(response, model)
+                response,
+                cls._aiter_json_lines(response, model, raise_if_unexpected_response),
             )
-        return cls._aclose_response_after(response, cls._aiter_sse(response, model))
+        return cls._aclose_response_after(
+            response, cls._aiter_sse(response, model, raise_if_unexpected_response)
+        )
 
     @staticmethod
     async def _aclose_response_after(
@@ -697,27 +1009,69 @@ class FastAPIClientAsyncBase:
         finally:
             await response.aclose()
 
-    @staticmethod
+    @classmethod
     async def _aiter_json_lines(
+        cls,
         response: Response,
         model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
     ) -> AsyncIterator[Any]:
         adapter = TypeAdapter(model)
         async for part in response.aiter_lines():
             if part:
-                yield adapter.validate_json(part)
+                yield cls._validate_stream_item(
+                    adapter, part, model, raise_if_unexpected_response
+                )
 
     @classmethod
     async def _aiter_sse(
         cls,
         response: Response,
         model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
     ) -> AsyncIterator[Any]:
         adapter = TypeAdapter(model)
         async for fields in cls._aiter_sse_event_fields(response.aiter_lines()):
-            if "data" in fields:
-                fields = {**fields, "data": adapter.validate_json(fields["data"])}
-            yield FastAPIClientSSE[model].model_validate(fields)
+            yield cls._build_sse(adapter, fields, model, raise_if_unexpected_response)
+
+    @classmethod
+    def _validate_stream_item(
+        cls,
+        adapter: TypeAdapter[Any],
+        raw: str,
+        model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
+    ) -> Any:  # noqa: ANN401
+        try:
+            return adapter.validate_json(raw)
+        except ValidationError as e:
+            item = FastAPIClientUnexpectedStreamItem(
+                data=cls._parse_json_or_none(raw),
+                raw=raw,
+                model=model,
+                validation_error=e,
+            )
+            if raise_if_unexpected_response:
+                raise FastAPIClientUnexpectedStreamItemError(result=item) from e
+            return item
+
+    @classmethod
+    def _build_sse(
+        cls,
+        adapter: TypeAdapter[Any],
+        fields: Mapping[str, Any],
+        model: Any,  # noqa: ANN401
+        raise_if_unexpected_response: bool,
+    ) -> FastAPIClientSSE[Any]:
+        event = FastAPIClientSSE[model].model_validate({**fields, "data": None})
+        if "data" not in fields:
+            return event
+        # Attach the data without revalidating it (Pydantic couldn't validate an
+        # unexpected stream item anyway).
+        data = cls._validate_stream_item(
+            adapter, fields["data"], model, raise_if_unexpected_response
+        )
+        return event.model_copy(update={"data": data})
 
     @classmethod
     async def _aiter_sse_event_fields(

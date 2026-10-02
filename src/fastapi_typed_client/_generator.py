@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 from collections.abc import AsyncIterator, Collection, Iterable, Iterator, Sequence
 from collections.abc import Set as AbstractSet
@@ -27,6 +28,7 @@ from .client import (
     _IMPORTS_VALIDATION_ERROR,
     FastAPIClientAsyncBase,
     FastAPIClientBase,
+    FastAPIClientError,
     FastAPIClientExtensions,
     FastAPIClientFile,
     FastAPIClientHTTPValidationError,
@@ -34,6 +36,14 @@ from .client import (
     FastAPIClientResult,
     FastAPIClientSecurityParam,
     FastAPIClientSSE,
+    FastAPIClientUnexpectedBody,
+    FastAPIClientUnexpectedBodyError,
+    FastAPIClientUnexpectedResponse,
+    FastAPIClientUnexpectedResponseError,
+    FastAPIClientUnexpectedStatus,
+    FastAPIClientUnexpectedStatusError,
+    FastAPIClientUnexpectedStreamItem,
+    FastAPIClientUnexpectedStreamItemError,
     FastAPIClientValidationError,
 )
 
@@ -41,9 +51,18 @@ from .client import (
 class _Identifiers(NamedTuple):
     client_extensions: str
     result: str
+    unexpected_status: str
+    unexpected_body: str
+    unexpected_stream_item: str
+    unexpected_response: str
     validation_error: str
     http_validation_error: str
+    error: str
     not_default_status_error: str
+    unexpected_response_error: str
+    unexpected_status_error: str
+    unexpected_body_error: str
+    unexpected_stream_item_error: str
     security_param: str
     sse: str
     file: str
@@ -55,9 +74,22 @@ class _Identifiers(NamedTuple):
         replacements = {
             FastAPIClientExtensions.__name__: self.client_extensions,
             FastAPIClientResult.__name__: self.result,
+            FastAPIClientUnexpectedStatus.__name__: self.unexpected_status,
+            FastAPIClientUnexpectedBody.__name__: self.unexpected_body,
+            FastAPIClientUnexpectedStreamItem.__name__: self.unexpected_stream_item,
+            "FastAPIClientUnexpectedResponse": self.unexpected_response,
             FastAPIClientValidationError.__name__: self.validation_error,
             FastAPIClientHTTPValidationError.__name__: self.http_validation_error,
+            FastAPIClientError.__name__: self.error,
             FastAPIClientNotDefaultStatusError.__name__: self.not_default_status_error,
+            FastAPIClientUnexpectedResponseError.__name__: (
+                self.unexpected_response_error
+            ),
+            FastAPIClientUnexpectedStatusError.__name__: self.unexpected_status_error,
+            FastAPIClientUnexpectedBodyError.__name__: self.unexpected_body_error,
+            FastAPIClientUnexpectedStreamItemError.__name__: (
+                self.unexpected_stream_item_error
+            ),
             FastAPIClientSecurityParam.__name__: self.security_param,
             FastAPIClientSSE.__name__: self.sse,
             FastAPIClientFile.__name__: self.file,
@@ -65,9 +97,14 @@ class _Identifiers(NamedTuple):
             FastAPIClientBase.__name__: self.base_class,
             FastAPIClientAsyncBase.__name__: self.base_class,
         }
-        for old, new in replacements.items():
-            code = code.replace(old, new)
-        return code
+        # Match whole identifiers only, since some names are prefixes of others (e.g.
+        # `FastAPIClientUnexpectedStatus` and `FastAPIClientUnexpectedStatusError`).
+        pattern = re.compile(rf"\b({'|'.join(map(re.escape, replacements))})\b")
+
+        def replace(match: re.Match[str]) -> str:
+            return replacements[match.group(0)]
+
+        return pattern.sub(replace, code)
 
 
 class _ImportGroup(Enum):
@@ -84,6 +121,7 @@ class ClientCodeGenerator:
         import_barriers: Iterable[str],
         import_client_base: bool,
         raise_if_not_default_status: bool,
+        raise_if_unexpected_response: bool,
         add_test_markers: bool,
     ) -> None:
         self._title = title
@@ -91,6 +129,7 @@ class ClientCodeGenerator:
         self._base_class = FastAPIClientBase if not async_ else FastAPIClientAsyncBase
         self._import_client_base = import_client_base
         self._raise_if_not_default_status = raise_if_not_default_status
+        self._raise_if_unexpected_response = raise_if_unexpected_response
         self._add_test_markers = add_test_markers
         self._impr = ImportRegistry()
         for import_barrier in import_barriers:
@@ -102,9 +141,20 @@ class ClientCodeGenerator:
             return _Identifiers(
                 client_extensions=FastAPIClientExtensions.__name__,
                 result=FastAPIClientResult.__name__,
+                unexpected_status=FastAPIClientUnexpectedStatus.__name__,
+                unexpected_body=FastAPIClientUnexpectedBody.__name__,
+                unexpected_stream_item=FastAPIClientUnexpectedStreamItem.__name__,
+                unexpected_response="FastAPIClientUnexpectedResponse",
                 validation_error=FastAPIClientValidationError.__name__,
                 http_validation_error=FastAPIClientHTTPValidationError.__name__,
+                error=FastAPIClientError.__name__,
                 not_default_status_error=FastAPIClientNotDefaultStatusError.__name__,
+                unexpected_response_error=FastAPIClientUnexpectedResponseError.__name__,
+                unexpected_status_error=FastAPIClientUnexpectedStatusError.__name__,
+                unexpected_body_error=FastAPIClientUnexpectedBodyError.__name__,
+                unexpected_stream_item_error=(
+                    FastAPIClientUnexpectedStreamItemError.__name__
+                ),
                 security_param=FastAPIClientSecurityParam.__name__,
                 sse=FastAPIClientSSE.__name__,
                 file=FastAPIClientFile.__name__,
@@ -115,9 +165,18 @@ class ClientCodeGenerator:
         return _Identifiers(
             client_extensions=f"{self._title}Extensions",
             result=f"{self._title}Result",
+            unexpected_status=f"{self._title}UnexpectedStatus",
+            unexpected_body=f"{self._title}UnexpectedBody",
+            unexpected_stream_item=f"{self._title}UnexpectedStreamItem",
+            unexpected_response=f"{self._title}UnexpectedResponse",
             validation_error=f"{self._title}ValidationError",
             http_validation_error=f"{self._title}HTTPValidationError",
+            error=f"{self._title}Error",
             not_default_status_error=f"{self._title}NotDefaultStatusError",
+            unexpected_response_error=f"{self._title}UnexpectedResponseError",
+            unexpected_status_error=f"{self._title}UnexpectedStatusError",
+            unexpected_body_error=f"{self._title}UnexpectedBodyError",
+            unexpected_stream_item_error=f"{self._title}UnexpectedStreamItemError",
             security_param=f"{self._title}SecurityParam",
             sse=f"{self._title}SSE",
             file=f"{self._title}File",
@@ -148,11 +207,8 @@ class ClientCodeGenerator:
         ).generate(routes, self._import_client_base)
 
     def _get_route_code(self, route: Route) -> str:
-        # Without overloads (i.e., with a single response), the method's declared
-        # return type is more specific than the one of `_route_handler`.
-        type_ignore = "  # type: ignore" if len(route.responses) == 1 else ""
         return self._get_route_signature_code(route) + indent(
-            f"return {'await ' if self._async else ''}self._route_handler({type_ignore}\n"
+            f"return {'await ' if self._async else ''}self._route_handler(\n"
             f"    path={dq_str_repr(route.path)},\n"
             f"    method={self._impr(HTTPMethod)}.{route.method.name},\n"
             f"    default_status={self._impr(HTTPStatus)}.{route.default_status.name},\n"
@@ -161,35 +217,49 @@ class ClientCodeGenerator:
             + indent(self._get_security_params_code(route.params))
             + indent(self._get_optional_params_code(route))
             + "    raise_if_not_default_status=raise_if_not_default_status,\n"
+            "    raise_if_unexpected_response=raise_if_unexpected_response,\n"
             "    client_exts=client_exts,\n"
             ")\n"
         )
 
     def _get_route_signature_code(self, route: Route) -> str:
-        if len(route.responses) == 1:
-            return f"{self._get_route_overload_signature_code(route, route.responses.values(), None)}:\n"
-
-        return (
-            f"@{self._impr(overload)}\n"
-            f"{self._get_route_overload_signature_code(route, route.responses[route.default_status], True)}: ...\n"
-            f"@{self._impr(overload)}\n"
-            f"{self._get_route_overload_signature_code(route, route.responses.values(), False)}: ...\n"
-            f"{self._get_route_overload_signature_code(route, None, None)}:\n"
-        )
+        code = ""
+        for raise_if_not_default_status in (
+            (None,) if len(route.responses) == 1 else (True, False)
+        ):
+            for raise_if_unexpected_response in (True, False):
+                responses_code = self._get_route_responses_code(
+                    route,
+                    only_default_status=bool(raise_if_not_default_status),
+                    with_unexpected_response=not raise_if_unexpected_response,
+                )
+                code += (
+                    f"@{self._impr(overload)}\n"
+                    f"{self._get_route_overload_signature_code(route, raise_if_not_default_status, raise_if_unexpected_response, responses_code)}: ...\n"
+                )
+        # The implementation signature is hidden from callers by the overloads. Pyright
+        # and mypy require its return type to be compatible with each overload's, which
+        # e.g. `Result[HTTPStatus, Any]` is not (the type parameters are invariant).
+        code += f"{self._get_route_overload_signature_code(route, None, None, self._impr(Any))}:\n"
+        return code
 
     def _get_route_overload_signature_code(
         self,
         route: Route,
-        responses: RouteResponse | Collection[RouteResponse] | None,
         raise_if_not_default_status: bool | None,
+        raise_if_unexpected_response: bool | None,
+        responses_code: str,
     ) -> str:
         return (
             f"{'async ' if self._async else ''}def {route.name}(\n"
             + "    self,\n"
             + indent(self._get_route_specific_params_code(route.params))
-            + indent(self._get_route_generic_params_code(raise_if_not_default_status))
-            + ") -> "
-            + self._get_route_responses_code(route, responses)
+            + indent(
+                self._get_route_generic_params_code(
+                    raise_if_not_default_status, raise_if_unexpected_response
+                )
+            )
+            + f") -> {responses_code}"
         )
 
     def _get_route_specific_params_code(self, params: Sequence[RouteParam]) -> str:
@@ -216,68 +286,88 @@ class ClientCodeGenerator:
         return self._idents.file
 
     def _get_route_generic_params_code(
-        self, raise_if_not_default_status: bool | None
+        self,
+        raise_if_not_default_status: bool | None,
+        raise_if_unexpected_response: bool | None,
     ) -> str:
-        raise_if_not_default_status_str = {
+        code = "*,\n"
+        code += self._get_route_flag_param_code(
+            "raise_if_not_default_status",
+            raise_if_not_default_status,
+            self._raise_if_not_default_status,
+        )
+        code += self._get_route_flag_param_code(
+            "raise_if_unexpected_response",
+            raise_if_unexpected_response,
+            self._raise_if_unexpected_response,
+        )
+        code += f"client_exts: {self._idents.client_extensions} | None = None,\n"
+        return code
+
+    def _get_route_flag_param_code(
+        self, name: str, value: bool | None, default: bool
+    ) -> str:
+        type_str = {
             True: self._impr(Literal[True]),
             False: self._impr(Literal[False]),
             None: "bool",
-        }[raise_if_not_default_status]
-        code = "*,\n"
-        code += f"raise_if_not_default_status: {raise_if_not_default_status_str}"
-        if (
-            raise_if_not_default_status is None
-            or raise_if_not_default_status == self._raise_if_not_default_status
-        ):
-            code += f" = {self._raise_if_not_default_status!r}"
-        code += ",\n"
-        code += f"client_exts: {self._idents.client_extensions} | None = None,\n"
-        return code
+        }[value]
+        code = f"{name}: {type_str}"
+        if value is None or value == default:
+            code += f" = {default!r}"
+        return code + ",\n"
 
     def _get_route_responses_code(
         self,
         route: Route,
-        responses: RouteResponse | Collection[RouteResponse] | None,
+        *,
+        only_default_status: bool,
+        with_unexpected_response: bool,
     ) -> str:
-        if not responses:
-            # The implementation signature is hidden from callers by the overloads.
-            # Pyright and mypy require its return type to be compatible with each
-            # overload's, which e.g. `Result[HTTPStatus, Any]` is not (the type
-            # parameters are invariant).
-            return self._impr(Any)
+        responses = (
+            [route.responses[route.default_status]]
+            if only_default_status
+            else list(route.responses.values())
+        )
 
-        if isinstance(responses, RouteResponse):
-            responses = (responses,)
-
-        code = ""
-        if len(responses) > 1:
-            code += "(\n    "
-        for i, response in enumerate(responses):
-            if i != 0:
-                code += "\n    | "
+        codes = list[str]()
+        for response in responses:
             response_type_code = self._get_response_type_code(response.type_)
             if (
                 route.streaming_kind is not None
                 and response.status == route.default_status
             ):
                 response_type_code = self._wrap_streaming_response_type_code(
-                    response_type_code, route.streaming_kind
+                    response_type_code, route.streaming_kind, with_unexpected_response
                 )
-            code += (
+            codes.append(
                 f"{self._idents.result}["
                 f"{self._impr(Literal)}[{self._impr(HTTPStatus)}.{response.status.name}], "
                 f"{response_type_code}"
                 "]"
             )
+        if with_unexpected_response:
+            codes.extend((self._idents.unexpected_status, self._idents.unexpected_body))
+
+        # Multiple declared responses are rendered one per line to keep diffs small
+        # when an endpoint's responses change.
         if len(responses) > 1:
-            code += "\n)"
-        return code
+            return "(\n    " + "\n    | ".join(codes) + "\n)"
+        return " | ".join(codes)
 
     def _wrap_streaming_response_type_code(
-        self, response_type_code: str, streaming_kind: RouteStreamingKind
+        self,
+        response_type_code: str,
+        streaming_kind: RouteStreamingKind,
+        with_unexpected_response: bool,
     ) -> str:
         iter_class = Iterator if not self._async else AsyncIterator
         iter_str = self._impr(iter_class)
+        if with_unexpected_response and streaming_kind in (
+            RouteStreamingKind.JSON_LINES,
+            RouteStreamingKind.SERVER_SENT_EVENTS,
+        ):
+            response_type_code += f" | {self._idents.unexpected_stream_item}"
         if streaming_kind is RouteStreamingKind.SERVER_SENT_EVENTS:
             return f"{iter_str}[{self._idents.sse}[{response_type_code}]]"
         return f"{iter_str}[{response_type_code}]"
@@ -379,6 +469,11 @@ class _BoilerplateCodeGenerator:
             route.streaming_kind is RouteStreamingKind.SERVER_SENT_EVENTS
             for route in routes
         )
+        has_validated_streams = any(
+            route.streaming_kind
+            in (RouteStreamingKind.JSON_LINES, RouteStreamingKind.SERVER_SENT_EVENTS)
+            for route in routes
+        )
         has_file_params = any(
             param.kind is RouteParamKind.FILE
             for route in routes
@@ -390,6 +485,7 @@ class _BoilerplateCodeGenerator:
                 has_validation_errors,
                 has_security_params,
                 has_sse,
+                has_validated_streams,
                 has_file_params,
             )
         return self._generate_without_import_client_base(
@@ -402,6 +498,7 @@ class _BoilerplateCodeGenerator:
         has_validation_errors: bool,
         has_security_params: bool,
         has_sse: bool,
+        has_validated_streams: bool,
         has_file_params: bool,
     ) -> str:
         # Manually write imports here so that modules are imported from specific
@@ -410,6 +507,9 @@ class _BoilerplateCodeGenerator:
             self._base_class.__name__,
             self._idents.client_extensions,
             self._idents.result,
+            self._idents.unexpected_status,
+            self._idents.unexpected_body,
+            self._idents.unexpected_stream_item if has_validated_streams else None,
             self._idents.http_validation_error if has_validation_errors else None,
             self._idents.security_param if has_security_params else None,
             self._idents.sse if has_sse else None,
@@ -431,6 +531,13 @@ class _BoilerplateCodeGenerator:
         # Can't programmatically look up import location of constants, so have to
         # hard-code those here.
         self._impr.add_import(Import(module="httpx2", name="USE_CLIENT_DEFAULT"))
+
+        # `JsonValue` is a `typing_extensions.TypeAliasType`, which the import
+        # registry's type-usage path can't resolve, so it must be imported by name.
+        self._impr.add_import(Import(module="pydantic", name="JsonValue"))
+        # Import `ValidationError` from where Pydantic re-exports it instead of from
+        # the `pydantic_core` module it is defined in.
+        self._impr.add_import(Import(module="pydantic", name="ValidationError"))
 
         # Manually specify where warn is imported from, because otherwise it resolves to
         # `from _warnings import warn`.
@@ -478,13 +585,29 @@ class _BoilerplateCodeGenerator:
             ),
             getsource(FastAPIClientExtensions),
             getsource(FastAPIClientResult),
+            getsource(FastAPIClientUnexpectedStatus),
+            getsource(FastAPIClientUnexpectedBody),
+            getsource(FastAPIClientUnexpectedStreamItem),
+            (
+                "FastAPIClientUnexpectedResponse = (\n    "
+                + "\n    | ".join(
+                    type_.__name__
+                    for type_ in get_args(FastAPIClientUnexpectedResponse)
+                )
+                + "\n)\n"
+            ),
             getsource(FastAPIClientValidationError) if has_validation_errors else None,
             (
                 getsource(FastAPIClientHTTPValidationError)
                 if has_validation_errors
                 else None
             ),
+            getsource(FastAPIClientError),
             getsource(FastAPIClientNotDefaultStatusError),
+            getsource(FastAPIClientUnexpectedResponseError),
+            getsource(FastAPIClientUnexpectedStatusError),
+            getsource(FastAPIClientUnexpectedBodyError),
+            getsource(FastAPIClientUnexpectedStreamItemError),
             getsource(FastAPIClientSecurityParam),
             getsource(FastAPIClientSSE),
             "FASTAPI_CLIENT_NOT_REQUIRED: Any = ...\n",

@@ -41,13 +41,13 @@ _RE_METHODS = re.compile(r"^ {4}def ([^\d\W]\w*)[([]", re.UNICODE | re.MULTILINE
 
 
 def assert_correct_generated_client() -> None:
-    # Use as heuristic that we have a class with the correct name and one the method
-    # definition for each app route.
+    # Use as heuristic that we have a class with the correct name and the method
+    # definitions for each app route (two overloads and the implementation).
     generated_client = Path("fastapi_client.py").read_text(encoding="utf-8")
     assert "class FastAPIClient" in generated_client
     methods = _RE_METHODS.findall(generated_client)
-    assert methods.count("foo") == 1
-    assert methods.count("bar") == 1
+    assert methods.count("foo") == 3
+    assert methods.count("bar") == 3
 
 
 pytestmark = pytest.mark.usefixtures("tmp_cwd")
