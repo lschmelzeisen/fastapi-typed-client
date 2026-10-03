@@ -386,7 +386,7 @@ Returned (or yielded, for stream items) instead of raised when using `raise_if_u
 
 #### `FastAPIClientError`
 
-Base class of all exceptions raised by generated clients, i.e., of `FastAPIClientNotDefaultStatusError`, `FastAPIClientUnexpectedResponseError`, and `FastAPIClientUnencodableParamError`.
+Base class of all exceptions raised by generated clients, i.e., of `FastAPIClientNotDefaultStatusError`, `FastAPIClientUnexpectedResponseError`, `FastAPIClientUnencodableParamError`, and `FastAPIClientConflictingParamError`.
 
 #### `FastAPIClientNotDefaultStatusError`
   
@@ -407,13 +407,22 @@ Instance attributes:
 
 #### `FastAPIClientUnencodableParamError`
 
-Exception raised before sending a request if a path, query, header, or cookie parameter has a value that cannot be sent such that FastAPI parses it back into the same value (see [using a generated client](#using-a-generated-client)). Also subclasses `ValueError`. Its message never includes the value, since it might be a secret.
+Exception raised before sending a request if a path, query, header, cookie, or security parameter has a value that cannot be sent such that FastAPI parses it back into the same value (see [using a generated client](#using-a-generated-client)). Also subclasses `ValueError`. Its message never includes the value, since it might be a secret.
 
 Instance attributes:
 
 - `location: Literal["path", "query", "header", "cookie"]`: Where the parameter is sent
 - `name: str`: The name of the parameter on the wire (i.e., its alias, if any)
 - `value: Any`: The value that cannot be sent
+
+#### `FastAPIClientConflictingParamError`
+
+Exception raised before sending a request if a security parameter and another parameter would both be sent as the same header (case-insensitively), cookie, or query parameter. Also subclasses `ValueError`.
+
+Instance attributes:
+
+- `location: Literal["query", "header", "cookie"]`: Where the parameters are sent
+- `name: str`: The name of the parameters on the wire
 
 #### `FastAPIClientHTTPValidationError` and `FastAPIClientValidationError`
   

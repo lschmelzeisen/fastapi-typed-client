@@ -233,6 +233,26 @@ class BirthdayAppClientUnencodableParamError(BirthdayAppClientError, ValueError)
         return self._value
 
 
+class BirthdayAppClientConflictingParamError(BirthdayAppClientError, ValueError):
+    def __init__(
+        self, *, location: Literal["query", "header", "cookie"], name: str
+    ) -> None:
+        super().__init__(
+            f"Cannot send {location} param `{name}`: it is set both by a security "
+            "scheme and by another param."
+        )
+        self._location = location
+        self._name = name
+
+    @property
+    def location(self) -> Literal["query", "header", "cookie"]:
+        return self._location
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+
 class BirthdayAppClientSecurityParam(NamedTuple):
     kind: Literal[
         "http_bearer",
@@ -413,7 +433,31 @@ class BirthdayAppClient:
         )
 
     @staticmethod
+    def _encode_http_basic_credentials(name: str, value: Any) -> str:  # noqa: ANN401
+        # FastAPI splits the credentials at the first `:` and decodes them as ASCII.
+        if not (
+            isinstance(value, tuple)
+            and len(value) == 2
+            and all(isinstance(part, str) for part in value)
+        ):
+            reason = (
+                "security scheme `http_basic` expects a `tuple[str, str]`, not "
+                f"`{type(value).__name__}`"
+            )
+        elif ":" in value[0]:
+            reason = "HTTP Basic usernames cannot contain `:`"
+        elif not (value[0] + value[1]).isascii():
+            reason = "HTTP Basic credentials must be ASCII"
+        else:
+            user_pass = b64encode(f"{value[0]}:{value[1]}".encode()).decode("ascii")
+            return f"Basic {user_pass}"
+        raise BirthdayAppClientUnencodableParamError(
+            location="header", name=name, value=value, reason=reason
+        )
+
+    @classmethod
     def _apply_security_params(
+        cls,
         security_params: Sequence[BirthdayAppClientSecurityParam] | None,
         header_params: list[tuple[str, str]],
         cookie_params: list[tuple[str, str]],
@@ -422,30 +466,38 @@ class BirthdayAppClient:
         for kind, name, value in security_params or ():
             if value is BIRTHDAY_APP_CLIENT_NOT_REQUIRED or value is None:
                 continue
-            target: list[tuple[str, str]]
-            encoded: str
-            if kind == "http_bearer" and isinstance(value, str):
-                target, encoded = header_params, f"Bearer {value}"
-            elif kind == "http_basic" and isinstance(value, tuple):
-                user_pass = b64encode(f"{value[0]}:{value[1]}".encode()).decode("ascii")
-                target, encoded = header_params, f"Basic {user_pass}"
-            elif kind == "api_key_header" and isinstance(value, str):
-                target, encoded = header_params, value
-            elif kind == "api_key_cookie" and isinstance(value, str):
-                target, encoded = cookie_params, value
-            elif kind == "api_key_query" and isinstance(value, str):
-                target, encoded = query_params, value
+            location: Literal["query", "header", "cookie"]
+            if kind == "api_key_cookie":
+                location, target = "cookie", cookie_params
+            elif kind == "api_key_query":
+                location, target = "query", query_params
             else:
-                raise TypeError(
-                    f"Security param `{name}` of kind `{kind}` has "
-                    f"incompatible value type `{type(value).__name__}`."
+                location, target = "header", header_params
+            if kind == "http_basic":
+                encoded = cls._encode_http_basic_credentials(name, value)
+            elif not isinstance(value, str):
+                raise BirthdayAppClientUnencodableParamError(
+                    location=location,
+                    name=name,
+                    value=value,
+                    reason=(
+                        f"security scheme `{kind}` expects a `str`, not "
+                        f"`{type(value).__name__}`"
+                    ),
                 )
-            if any(key == name for key, _ in target):
-                raise RuntimeError(
-                    f"Security param `{name}` conflicts with an already-set "
-                    f"{kind.split('_', 1)[0]} param of the same name."
-                )
-            target.append((name, encoded))
+            elif kind == "http_bearer":
+                encoded = f"Bearer {value}"
+            else:
+                encoded = value
+            # Header names are case-insensitive.
+            if any(
+                key == name or (location == "header" and key.lower() == name.lower())
+                for key, _ in target
+            ):
+                raise BirthdayAppClientConflictingParamError(location=location, name=name)
+            target.append(
+                (name, cls._encode_param_item(location, name, value, encoded))
+            )
 
     def _route_handler(
         self,

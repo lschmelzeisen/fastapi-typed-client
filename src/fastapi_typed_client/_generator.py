@@ -30,6 +30,7 @@ from .client import (
     _IMPORTS_VALIDATION_ERROR,
     FastAPIClientAsyncBase,
     FastAPIClientBase,
+    FastAPIClientConflictingParamError,
     FastAPIClientError,
     FastAPIClientExtensions,
     FastAPIClientFile,
@@ -67,6 +68,7 @@ class _Identifiers(NamedTuple):
     unexpected_body_error: str
     unexpected_stream_item_error: str
     unencodable_param_error: str
+    conflicting_param_error: str
     security_param: str
     sse: str
     file: str
@@ -95,6 +97,7 @@ class _Identifiers(NamedTuple):
                 self.unexpected_stream_item_error
             ),
             FastAPIClientUnencodableParamError.__name__: self.unencodable_param_error,
+            FastAPIClientConflictingParamError.__name__: self.conflicting_param_error,
             FastAPIClientSecurityParam.__name__: self.security_param,
             FastAPIClientSSE.__name__: self.sse,
             FastAPIClientFile.__name__: self.file,
@@ -161,6 +164,7 @@ class ClientCodeGenerator:
                     FastAPIClientUnexpectedStreamItemError.__name__
                 ),
                 unencodable_param_error=FastAPIClientUnencodableParamError.__name__,
+                conflicting_param_error=FastAPIClientConflictingParamError.__name__,
                 security_param=FastAPIClientSecurityParam.__name__,
                 sse=FastAPIClientSSE.__name__,
                 file=FastAPIClientFile.__name__,
@@ -184,6 +188,7 @@ class ClientCodeGenerator:
             unexpected_body_error=f"{self._title}UnexpectedBodyError",
             unexpected_stream_item_error=f"{self._title}UnexpectedStreamItemError",
             unencodable_param_error=f"{self._title}UnencodableParamError",
+            conflicting_param_error=f"{self._title}ConflictingParamError",
             security_param=f"{self._title}SecurityParam",
             sse=f"{self._title}SSE",
             file=f"{self._title}File",
@@ -635,6 +640,7 @@ class _BoilerplateCodeGenerator:
             getsource(FastAPIClientUnexpectedBodyError),
             getsource(FastAPIClientUnexpectedStreamItemError),
             getsource(FastAPIClientUnencodableParamError),
+            getsource(FastAPIClientConflictingParamError),
             getsource(FastAPIClientSecurityParam),
             getsource(FastAPIClientSSE),
             "FASTAPI_CLIENT_NOT_REQUIRED: Any = ...\n",

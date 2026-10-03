@@ -11,6 +11,7 @@ from httpx2 import ASGITransport, AsyncClient, Response
 from pydantic import ValidationError
 
 from fastapi_typed_client import (
+    FastAPIClientConflictingParamError,
     FastAPIClientError,
     FastAPIClientNotDefaultStatusError,
     FastAPIClientResult,
@@ -1046,6 +1047,9 @@ _NOT_DEFAULT_STATUS_ERROR = FastAPIClientNotDefaultStatusError(
 _UNENCODABLE_PARAM_ERROR = FastAPIClientUnencodableParamError(
     location="header", name="foo", value=None, reason="bar"
 )
+_CONFLICTING_PARAM_ERROR = FastAPIClientConflictingParamError(
+    location="header", name="foo"
+)
 
 
 @pytest.mark.parametrize(
@@ -1100,6 +1104,10 @@ _UNENCODABLE_PARAM_ERROR = FastAPIClientUnencodableParamError(
         pytest.param(
             _UNENCODABLE_PARAM_ERROR, "value", id="UnencodableParamError.value"
         ),
+        pytest.param(
+            _CONFLICTING_PARAM_ERROR, "location", id="ConflictingParamError.location"
+        ),
+        pytest.param(_CONFLICTING_PARAM_ERROR, "name", id="ConflictingParamError.name"),
     ],
 )
 def test_error_attributes_are_read_only(

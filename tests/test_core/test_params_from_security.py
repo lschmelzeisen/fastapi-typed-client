@@ -1,7 +1,7 @@
 from typing import Annotated, Any
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Cookie, Depends, FastAPI, Header, Query
 from fastapi.security import (
     APIKeyCookie,
     APIKeyHeader,
@@ -122,6 +122,55 @@ def app_openid_connect() -> FastAPI:
         ],
     ) -> str:
         return token
+
+    return app
+
+
+@pytest.fixture
+def app_invalid_security_params() -> FastAPI:
+    app = FastAPI()
+
+    @app.get("/bearer")
+    def bearer(
+        creds: Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())],
+    ) -> str:
+        return creds.credentials
+
+    @app.get("/basic")
+    def basic(creds: Annotated[HTTPBasicCredentials, Depends(HTTPBasic())]) -> str:
+        return creds.username
+
+    @app.get("/api-key-header")
+    def api_key_header(
+        key: Annotated[str, Depends(APIKeyHeader(name="X-API-Key"))],
+        other: Annotated[str | None, Header(alias="x-api-key")] = None,
+    ) -> str:
+        return f"{key}-{other}"
+
+    @app.get("/api-key-cookie")
+    def api_key_cookie(
+        key: Annotated[str, Depends(APIKeyCookie(name="session"))],
+        other: Annotated[str | None, Cookie(alias="session")] = None,
+    ) -> str:
+        return f"{key}-{other}"
+
+    @app.get("/api-key-query")
+    def api_key_query(
+        key: Annotated[str, Depends(APIKeyQuery(name="api_key"))],
+        other: Annotated[str | None, Query(alias="api_key")] = None,
+    ) -> str:
+        return f"{key}-{other}"
+
+    @app.get("/two-schemes")
+    def two_schemes(
+        creds: Annotated[
+            HTTPAuthorizationCredentials | None, Depends(HTTPBearer(auto_error=False))
+        ],
+        key: Annotated[
+            str | None, Depends(APIKeyHeader(name="authorization", auto_error=False))
+        ],
+    ) -> str:
+        return f"{creds}-{key}"
 
     return app
 
@@ -755,5 +804,201 @@ async def test_explicit_scheme_on_decorator_falls_back_to_scheme_name_async(
     await async_client_tester(
         app_explicit_scheme_on_decorator,
         client_test,
+        assert_format_of_generated_code=False,
+    )
+
+
+def test_invalid_security_params(
+    app_invalid_security_params: FastAPI, client_tester: ClientTester
+) -> None:
+    def client_test(client: Any) -> None:  # noqa: ANN401
+        from typing import Any, cast
+
+        import pytest
+
+        from fastapi_typed_client import (
+            FastAPIClientConflictingParamError,
+            FastAPIClientError,
+            FastAPIClientUnencodableParamError,
+        )
+
+        with pytest.raises(
+            FastAPIClientUnencodableParamError,
+            match=(
+                r"^Cannot send header param `Authorization`: security scheme "
+                r"`http_bearer` expects a `str`, not `int`\.$"
+            ),
+        ) as error:
+            client.bearer(cast(Any, 123))
+        assert error.value.location == "header"
+        assert error.value.name == "Authorization"
+        assert error.value.value == 123
+
+        for creds, reason in (
+            (
+                cast(Any, ("user", "pass", "extra")),
+                r"security scheme `http_basic` expects a `tuple\[str, str\]`, not `tuple`",
+            ),
+            (("us:er", "pass"), "HTTP Basic usernames cannot contain `:`"),
+            (("üser", "pass"), "HTTP Basic credentials must be ASCII"),
+        ):
+            with pytest.raises(
+                FastAPIClientUnencodableParamError,
+                match=rf"^Cannot send header param `Authorization`: {reason}\.$",
+            ):
+                client.basic(creds)
+        assert client.basic(("user", "pa:ss")).data == "user"
+
+        with pytest.raises(
+            FastAPIClientUnencodableParamError,
+            match=(
+                r"^Cannot send header param `X-API-Key`: header values must be "
+                r"printable ASCII\.$"
+            ),
+        ) as error:
+            client.api_key_header("secret\n")
+        # Values might be secrets, so they must not appear in messages.
+        assert "secret" not in str(error.value)
+        with pytest.raises(
+            FastAPIClientUnencodableParamError,
+            match=r"^Cannot send cookie param `session`: cookie values cannot",
+        ):
+            client.api_key_cookie("a;b")
+
+        # Header names are case-insensitive.
+        with pytest.raises(
+            FastAPIClientConflictingParamError,
+            match=(
+                r"^Cannot send header param `X-API-Key`: it is set both by a "
+                r"security scheme and by another param\.$"
+            ),
+        ) as error:
+            client.api_key_header("key", other="other")
+        assert isinstance(error.value, FastAPIClientError)
+        assert isinstance(error.value, ValueError)
+        assert error.value.location == "header"
+        assert error.value.name == "X-API-Key"
+        assert client.api_key_header("key").data == "key-key"
+
+        with pytest.raises(
+            FastAPIClientConflictingParamError,
+            match=r"^Cannot send cookie param `session`",
+        ):
+            client.api_key_cookie("key", other="other")
+        with pytest.raises(
+            FastAPIClientConflictingParamError,
+            match=r"^Cannot send query param `api_key`",
+        ):
+            client.api_key_query("key", other="other")
+        assert client.api_key_query("key").data == "key-key"
+        with pytest.raises(
+            FastAPIClientConflictingParamError,
+            match=r"^Cannot send header param `authorization`",
+        ):
+            client.two_schemes("token", "key")
+
+    # Unlike other tests in this file, import the errors from `fastapi_typed_client`.
+    client_tester(
+        app_invalid_security_params,
+        client_test,
+        import_client_base=True,
+        assert_format_of_generated_code=False,
+    )
+
+
+async def test_invalid_security_params_async(
+    app_invalid_security_params: FastAPI, async_client_tester: AsyncClientTester
+) -> None:
+    async def client_test(client: Any) -> None:  # noqa: ANN401
+        from typing import Any, cast
+
+        import pytest
+
+        from fastapi_typed_client import (
+            FastAPIClientConflictingParamError,
+            FastAPIClientError,
+            FastAPIClientUnencodableParamError,
+        )
+
+        with pytest.raises(
+            FastAPIClientUnencodableParamError,
+            match=(
+                r"^Cannot send header param `Authorization`: security scheme "
+                r"`http_bearer` expects a `str`, not `int`\.$"
+            ),
+        ) as error:
+            await client.bearer(cast(Any, 123))
+        assert error.value.location == "header"
+        assert error.value.name == "Authorization"
+        assert error.value.value == 123
+
+        for creds, reason in (
+            (
+                cast(Any, ("user", "pass", "extra")),
+                r"security scheme `http_basic` expects a `tuple\[str, str\]`, not `tuple`",
+            ),
+            (("us:er", "pass"), "HTTP Basic usernames cannot contain `:`"),
+            (("üser", "pass"), "HTTP Basic credentials must be ASCII"),
+        ):
+            with pytest.raises(
+                FastAPIClientUnencodableParamError,
+                match=rf"^Cannot send header param `Authorization`: {reason}\.$",
+            ):
+                await client.basic(creds)
+        assert (await client.basic(("user", "pa:ss"))).data == "user"
+
+        with pytest.raises(
+            FastAPIClientUnencodableParamError,
+            match=(
+                r"^Cannot send header param `X-API-Key`: header values must be "
+                r"printable ASCII\.$"
+            ),
+        ) as error:
+            await client.api_key_header("secret\n")
+        # Values might be secrets, so they must not appear in messages.
+        assert "secret" not in str(error.value)
+        with pytest.raises(
+            FastAPIClientUnencodableParamError,
+            match=r"^Cannot send cookie param `session`: cookie values cannot",
+        ):
+            await client.api_key_cookie("a;b")
+
+        # Header names are case-insensitive.
+        with pytest.raises(
+            FastAPIClientConflictingParamError,
+            match=(
+                r"^Cannot send header param `X-API-Key`: it is set both by a "
+                r"security scheme and by another param\.$"
+            ),
+        ) as error:
+            await client.api_key_header("key", other="other")
+        assert isinstance(error.value, FastAPIClientError)
+        assert isinstance(error.value, ValueError)
+        assert error.value.location == "header"
+        assert error.value.name == "X-API-Key"
+        assert (await client.api_key_header("key")).data == "key-key"
+
+        with pytest.raises(
+            FastAPIClientConflictingParamError,
+            match=r"^Cannot send cookie param `session`",
+        ):
+            await client.api_key_cookie("key", other="other")
+        with pytest.raises(
+            FastAPIClientConflictingParamError,
+            match=r"^Cannot send query param `api_key`",
+        ):
+            await client.api_key_query("key", other="other")
+        assert (await client.api_key_query("key")).data == "key-key"
+        with pytest.raises(
+            FastAPIClientConflictingParamError,
+            match=r"^Cannot send header param `authorization`",
+        ):
+            await client.two_schemes("token", "key")
+
+    # Unlike other tests in this file, import the errors from `fastapi_typed_client`.
+    await async_client_tester(
+        app_invalid_security_params,
+        client_test,
+        import_client_base=True,
         assert_format_of_generated_code=False,
     )

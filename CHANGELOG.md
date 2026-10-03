@@ -13,7 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - With the new `raise_if_unexpected_response=False` parameter of generated client methods (or `--no-raise-if-unexpected-response` when generating), they are instead returned (or yielded) as the new `FastAPIClientUnexpectedStatus`, `FastAPIClientUnexpectedBody`, or `FastAPIClientUnexpectedStreamItem` (union alias `FastAPIClientUnexpectedResponse`), which are added to the return types.
   - Either way, they take precedence over `raise_if_not_default_status`.
 - New exception base class `FastAPIClientError`.
-- New `FastAPIClientUnencodableParamError` (subclassing `FastAPIClientError` and `ValueError`), raised before sending a request if a path, query, header, or cookie parameter value can't be sent such that FastAPI parses it back into the same value. Previously, such values were silently altered or raised less specific errors, e.g. cookie values containing `;` (truncated), header or cookie values that aren't printable ASCII or have surrounding whitespace, and path values with `.` or `..` segments.
+- New `FastAPIClientUnencodableParamError` and `FastAPIClientConflictingParamError` (both subclassing `FastAPIClientError` and `ValueError`), raised before sending a request:
+  - `FastAPIClientUnencodableParamError` if a path, query, header, cookie, or security parameter value can't be sent such that FastAPI parses it back into the same value. Previously, such values were silently altered or raised less specific errors, e.g. cookie values containing `;` (truncated), header or cookie values that aren't printable ASCII or have surrounding whitespace, path values with `.` or `..` segments, HTTP Basic credentials whose username contains `:` or that aren't ASCII, and security parameters of the wrong type (`TypeError`).
+  - `FastAPIClientConflictingParamError` if a security parameter and another parameter would be sent as the same header, cookie, or query parameter (previously `RuntimeError`; now also detecting header names that differ only in case and conflicts between two security schemes).
 
 ### Changed
 
