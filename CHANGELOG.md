@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Header and cookie parameters of non-string types (e.g. `int`, `bool`, or `list[int]`) are now sent instead of raising `TypeError` ([#2](https://github.com/lschmelzeisen/fastapi-typed-client/issues/2)), with list-typed headers sent as one header line per item.
 - Path values are now percent-encoded (except for `/`), so values containing `?` or `#` are no longer truncated, and floats in paths no longer lose precision (e.g. `1e-25` was sent as `0`).
 - `Decimal`, `timedelta`, and `SecretStr`/`SecretBytes` parameter values are now sent correctly (previously, `Decimal`s lost precision, `timedelta`s were sent as seconds, which FastAPI rejects, and secrets were sent masked).
+- Parameters with a `validation_alias` are now sent under that name, and fields of Pydantic models used as `Header()` parameters with underscores converted to hyphens (unless they have an alias or the model uses `Header(convert_underscores=False)`).
 - On streaming routes, responses with a non-default status code now retain their body (previously, `response.text` raised `ResponseNotRead`), and the streaming item type in the generated return type is now applied to the default response (previously, to the response with the lowest status code).
 
 ## [0.6.0](https://github.com/lschmelzeisen/fastapi-typed-client/releases/tag/v0.6.0) - 2026-08-27

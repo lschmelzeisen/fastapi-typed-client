@@ -16,9 +16,10 @@ from fastapi.dependencies.utils import (
     _get_flat_body_params,
     _get_flat_fields_from_params,
     get_typed_return_annotation,
+    get_validation_alias,
 )
 from fastapi.openapi.utils import _get_openapi_dependency_data
-from fastapi.params import Body, File, Form
+from fastapi.params import Body, File, Form, Header
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute, _APIRouteLike, iter_route_contexts
 from fastapi.security import (
@@ -233,8 +234,26 @@ def _parse_params(route: _APIRouteLike) -> tuple[Sequence[RouteParam], bool]:
         _partition_body_fields(_get_flat_body_params(route.dependant))
     )
 
+    # Header models can only disable the conversion of underscores in their field
+    # names via the `Header()` of the model itself.
+    header_field_info = (
+        dependency_data.header_params[0].field_info
+        if dependency_data.header_params
+        else None
+    )
+    header_convert_underscores = (
+        not isinstance(header_field_info, Header)
+        or header_field_info.convert_underscores
+    )
     route_params_map: dict[RouteParamKind, Sequence[RouteParam]] = {
-        kind: _fields_to_route_params(kind, fields, incompatible_names)
+        kind: _fields_to_route_params(
+            kind,
+            fields,
+            incompatible_names,
+            convert_underscores=(
+                kind is RouteParamKind.HEADER and header_convert_underscores
+            ),
+        )
         for kind, fields in fields_params_map.items()
     }
     route_params_map[RouteParamKind.SECURITY] = _parse_security_params(
@@ -315,9 +334,11 @@ def _fields_to_route_params(
     kind: RouteParamKind,
     fields: Sequence[ModelField],
     incompatible_names: set[str],
+    *,
+    convert_underscores: bool,
 ) -> Sequence[RouteParam]:
     result = list[RouteParam]()
-    for group in _group_fields_by_alias(fields):
+    for alias, group in _group_fields_by_alias(fields, convert_underscores).items():
         primary = group[0]
         if not _is_field_group_compatible(group):
             incompatible_names.add(primary.name)
@@ -325,7 +346,7 @@ def _fields_to_route_params(
         result.append(
             RouteParam(
                 name=primary.name,
-                alias=primary.field_info.alias,
+                alias=alias,
                 kind=kind,
                 type_=primary.field_info.annotation or type(Any),
                 required=any(p.field_info.is_required() for p in group),
@@ -336,15 +357,26 @@ def _fields_to_route_params(
 
 
 def _group_fields_by_alias(
-    fields: Sequence[ModelField],
-) -> Iterable[list[ModelField]]:
+    fields: Sequence[ModelField], convert_underscores: bool
+) -> dict[str, list[ModelField]]:
     # Two (sub-)dependencies of the same route may each declare the same parameter —
     # e.g. two `Depends` both taking `item_id: Annotated[int, Path()]`. These represent
     # one HTTP parameter, so we collapse them into a single group.
     grouped: dict[str, list[ModelField]] = {}
     for field in fields:
-        grouped.setdefault(field.alias, []).append(field)
-    return grouped.values()
+        grouped.setdefault(_get_alias(field, convert_underscores), []).append(field)
+    return grouped
+
+
+def _get_alias(field: ModelField, convert_underscores: bool) -> str:
+    # Mirror FastAPI's `request_params_to_args()`, which converts underscores in the
+    # names of headers (including fields of header models) without alias.
+    alias = get_validation_alias(field)
+    if alias == field.name and getattr(
+        field.field_info, "convert_underscores", convert_underscores
+    ):
+        return alias.replace("_", "-")
+    return alias
 
 
 def _get_unencodable_default(kind: RouteParamKind, group: Sequence[ModelField]) -> Any:  # noqa: ANN401

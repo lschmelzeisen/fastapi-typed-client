@@ -20,6 +20,12 @@ from ..shared import FooBarEnum
 # the generated test file.
 
 
+class _HeaderModel(BaseModel):
+    x_val: int
+    y_val: int = Field(default=0, alias="Y-Explicit")
+    z_val: int = Field(default=0, validation_alias="Z-VA")
+
+
 class _Sentinel:
     __slots__ = ()
 
@@ -96,6 +102,31 @@ def app() -> FastAPI:
     @app.get("/path-converter/{s:path}")
     def path_converter(s: str) -> str:
         return s
+
+    return app
+
+
+@pytest.fixture
+def app_with_aliases() -> FastAPI:
+    app = FastAPI()
+
+    @app.get("/aliases")
+    def aliases(
+        va: Annotated[str, Query(validation_alias="vaAlias")],
+        h_va: Annotated[str, Header(validation_alias="X-VA")],
+        no_conv: Annotated[str, Header(convert_underscores=False)],
+    ) -> str:
+        return repr((va, h_va, no_conv))
+
+    @app.get("/header-model")
+    def header_model(model: Annotated[_HeaderModel, Header()]) -> str:
+        return repr((model.x_val, model.y_val, model.z_val))
+
+    @app.get("/header-model-unconverted")
+    def header_model_unconverted(
+        model: Annotated[_HeaderModel, Header(convert_underscores=False)],
+    ) -> str:
+        return repr((model.x_val, model.y_val, model.z_val))
 
     return app
 
@@ -298,6 +329,64 @@ async def test_non_str_values_async(
 
     await async_client_tester(
         app,
+        client_test,
+        assert_format_of_generated_code=False,
+    )
+
+
+def test_aliases(app_with_aliases: FastAPI, client_tester: ClientTester) -> None:
+    def client_test(client: Any) -> None:  # noqa: ANN401
+        result = client.aliases(va="a", h_va="b", no_conv="c")
+        assert result.data == "('a', 'b', 'c')"
+        assert result.response.url.query == b"vaAlias=a"
+        assert result.response.request.headers["X-VA"] == "b"
+        assert result.response.request.headers["no_conv"] == "c"
+
+        result = client.header_model(x_val=1, y_val=2, z_val=3)
+        assert result.data == "(1, 2, 3)"
+        headers = result.response.request.headers
+        assert (headers["x-val"], headers["Y-Explicit"], headers["Z-VA"]) == (
+            "1",
+            "2",
+            "3",
+        )
+
+        result = client.header_model_unconverted(x_val=1)
+        assert result.data == "(1, 0, 0)"
+        assert result.response.request.headers["x_val"] == "1"
+
+    client_tester(
+        app_with_aliases,
+        client_test,
+        assert_format_of_generated_code=False,
+    )
+
+
+async def test_aliases_async(
+    app_with_aliases: FastAPI, async_client_tester: AsyncClientTester
+) -> None:
+    async def client_test(client: Any) -> None:  # noqa: ANN401
+        result = await client.aliases(va="a", h_va="b", no_conv="c")
+        assert result.data == "('a', 'b', 'c')"
+        assert result.response.url.query == b"vaAlias=a"
+        assert result.response.request.headers["X-VA"] == "b"
+        assert result.response.request.headers["no_conv"] == "c"
+
+        result = await client.header_model(x_val=1, y_val=2, z_val=3)
+        assert result.data == "(1, 2, 3)"
+        headers = result.response.request.headers
+        assert (headers["x-val"], headers["Y-Explicit"], headers["Z-VA"]) == (
+            "1",
+            "2",
+            "3",
+        )
+
+        result = await client.header_model_unconverted(x_val=1)
+        assert result.data == "(1, 0, 0)"
+        assert result.response.request.headers["x_val"] == "1"
+
+    await async_client_tester(
+        app_with_aliases,
         client_test,
         assert_format_of_generated_code=False,
     )
