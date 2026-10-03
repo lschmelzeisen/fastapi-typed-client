@@ -23,10 +23,6 @@ from typing import (
 )
 from warnings import warn
 
-from birthday_app import (
-    BirthdayData,
-    GetBirthdayError,
-)
 from fastapi.encoders import jsonable_encoder
 from fastapi.sse import ServerSentEvent
 from httpx2 import (
@@ -41,6 +37,11 @@ from pydantic import (
     JsonValue,
     TypeAdapter,
     ValidationError,
+)
+
+from birthday_app import (
+    BirthdayData,
+    GetBirthdayError,
 )
 
 if TYPE_CHECKING:
@@ -184,9 +185,7 @@ class BirthdayAppClientUnexpectedBodyError(BirthdayAppClientUnexpectedResponseEr
         return self._body_result
 
 
-class BirthdayAppClientUnexpectedStreamItemError(
-    BirthdayAppClientUnexpectedResponseError
-):
+class BirthdayAppClientUnexpectedStreamItemError(BirthdayAppClientUnexpectedResponseError):
     def __init__(self, *, result: BirthdayAppClientUnexpectedStreamItem) -> None:
         super().__init__(
             "Received a stream item that does not match the declared model "
@@ -694,11 +693,7 @@ class BirthdayAppClient:
         raise_if_not_default_status: Literal[True],
         raise_if_unexpected_response: Literal[False],
         client_exts: BirthdayAppClientExtensions | None = None,
-    ) -> (
-        BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]
-        | BirthdayAppClientUnexpectedStatus
-        | BirthdayAppClientUnexpectedBody
-    ): ...
+    ) -> BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool] | BirthdayAppClientUnexpectedStatus | BirthdayAppClientUnexpectedBody: ...
     @overload
     def register_birthday(
         self,
@@ -709,10 +704,7 @@ class BirthdayAppClient:
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]
-        | BirthdayAppClientResult[
-            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
-            BirthdayAppClientHTTPValidationError,
-        ]
+        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
     ): ...
     @overload
     def register_birthday(
@@ -724,10 +716,7 @@ class BirthdayAppClient:
         client_exts: BirthdayAppClientExtensions | None = None,
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.CREATED], bool]
-        | BirthdayAppClientResult[
-            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
-            BirthdayAppClientHTTPValidationError,
-        ]
+        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
         | BirthdayAppClientUnexpectedStatus
         | BirthdayAppClientUnexpectedBody
     ): ...
@@ -772,11 +761,7 @@ class BirthdayAppClient:
         raise_if_not_default_status: Literal[True],
         raise_if_unexpected_response: Literal[False],
         client_exts: BirthdayAppClientExtensions | None = None,
-    ) -> (
-        BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]
-        | BirthdayAppClientUnexpectedStatus
-        | BirthdayAppClientUnexpectedBody
-    ): ...
+    ) -> BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData] | BirthdayAppClientUnexpectedStatus | BirthdayAppClientUnexpectedBody: ...
     @overload
     def get_birthday(
         self,
@@ -788,10 +773,7 @@ class BirthdayAppClient:
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]
         | BirthdayAppClientResult[Literal[HTTPStatus.NOT_FOUND], GetBirthdayError]
-        | BirthdayAppClientResult[
-            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
-            BirthdayAppClientHTTPValidationError,
-        ]
+        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
     ): ...
     @overload
     def get_birthday(
@@ -804,10 +786,7 @@ class BirthdayAppClient:
     ) -> (
         BirthdayAppClientResult[Literal[HTTPStatus.OK], BirthdayData]
         | BirthdayAppClientResult[Literal[HTTPStatus.NOT_FOUND], GetBirthdayError]
-        | BirthdayAppClientResult[
-            Literal[HTTPStatus.UNPROCESSABLE_CONTENT],
-            BirthdayAppClientHTTPValidationError,
-        ]
+        | BirthdayAppClientResult[Literal[HTTPStatus.UNPROCESSABLE_CONTENT], BirthdayAppClientHTTPValidationError]
         | BirthdayAppClientUnexpectedStatus
         | BirthdayAppClientUnexpectedBody
     ): ...

@@ -89,7 +89,10 @@ unknown-variable-type = false
 unused-call-result = false
 
 [tool.ruff.format]
-exclude = ["*.md"] # Don't reformat code blocks in Markdown files.
+exclude = [
+    "*.md", # Don't reformat code blocks in Markdown files.
+    "examples/birthday_app_client.py", # Keep the example client as generated.
+]
 
 [tool.ruff.lint]
 select = ["A", "ANN", "ASYNC", "ARG", "B", "BLE", "C4", "C90", "DTZ", "E4", "E7", "E9", "ERA", "I", "INP", "F", "FAST", "FURB", "LOG", "N", "PIE", "PT", "PTH", "PYI", "RET", "RUF", "S", "SIM", "SLF", "SLOT", "T10", "T20", "UP", "YTT"]
@@ -98,6 +101,7 @@ select = ["A", "ANN", "ASYNC", "ARG", "B", "BLE", "C4", "C90", "DTZ", "E4", "E7"
 "tests/**/*.py" = ["S101"] # Allow asserts in tests.
 "examples/**/*.py" = ["INP001"] # Dont require __init__.py for examples.
 "examples/**/test_*.py" = ["S101"] # Allow asserts in examples tests.
+"examples/birthday_app_client.py" = ["I001"] # Keep the example client as generated.
 
 [[tool.uv.index]]
 name = "testpypi"
