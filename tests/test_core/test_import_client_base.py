@@ -31,7 +31,7 @@ def test_without_import_client_base(app: FastAPI) -> None:
     generate_fastapi_typed_client(app, import_client_base=False)
     generated_client = Path("fastapi_client.py").read_text(encoding="utf-8")
 
-    assert not _RE_IMPORTS.findall(generated_client)
+    assert _RE_IMPORTS.findall(generated_client)
     for module in _RE_FROM_IMPORTS.findall(generated_client):
         assert not module.startswith(".")
         assert module != "fastapi_typed_client"

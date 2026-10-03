@@ -33,6 +33,7 @@ from fastapi.security import (
 )
 from fastapi.security.base import SecurityBase
 from fastapi.sse import EventSourceResponse
+from pydantic_core import PydanticUndefined
 from starlette.routing import BaseRoute
 
 from ._utils import to_snake_case
@@ -85,6 +86,9 @@ class RouteParam(NamedTuple):
     kind: RouteParamKind
     type_: Any
     required: bool = False
+    # Server-side default if it has no wire representation (`None` or `[]`), else
+    # `PydanticUndefined`.
+    unencodable_default: Any = PydanticUndefined
     security: RouteSecurity | None = None
 
 
@@ -325,6 +329,7 @@ def _fields_to_route_params(
                 kind=kind,
                 type_=primary.field_info.annotation or type(Any),
                 required=any(p.field_info.is_required() for p in group),
+                unencodable_default=_get_unencodable_default(kind, group),
             )
         )
     return result
@@ -340,6 +345,27 @@ def _group_fields_by_alias(
     for field in fields:
         grouped.setdefault(field.alias, []).append(field)
     return grouped.values()
+
+
+def _get_unencodable_default(kind: RouteParamKind, group: Sequence[ModelField]) -> Any:  # noqa: ANN401
+    # Each contribution to the same parameter receives its own default when the
+    # parameter is absent, so there only is a single default if all of them agree.
+    # Only well-known default factories are considered, since others might have side
+    # effects or require validated data.
+    if kind not in (RouteParamKind.QUERY, RouteParamKind.HEADER, RouteParamKind.COOKIE):
+        return PydanticUndefined
+    defaults = list[Any]()
+    for field in group:
+        default = field.field_info.default  # `PydanticUndefined` if there is none.
+        if field.field_info.default_factory in (list, tuple, set, frozenset) or (
+            type(default) in (list, tuple, set, frozenset) and not default
+        ):
+            defaults.append([])
+        else:
+            defaults.append(None if default is None else PydanticUndefined)
+    if all(default == defaults[0] for default in defaults):
+        return defaults[0]
+    return PydanticUndefined
 
 
 def _is_field_group_compatible(group: Sequence[ModelField]) -> bool:

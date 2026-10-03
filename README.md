@@ -288,6 +288,10 @@ class FastAPIClient:
 
 With an [client instance](#instantiating-a-generated-client) you can then just call this as `client.endpoint(foo="foo", bar=123, baz=BazModel())`. If you are unsure about the parameters and types of your generated client, it is helpful to review the generated `fastapi_client.py`. See [auxiliary classes](#auxiliary-classes), for documentation on classes like `FastAPIClientResult` and `FastAPIClientExtensions`.
 
+Path, query, header, and cookie parameters are sent as the strings that FastAPI parses back into the passed values: Booleans become `true`/`false`, lists become repeated query parameters or header lines, and path values are percent-encoded (except for `/`, so that `{param:path}` works). Since these locations have no representation for `None` or empty lists, passing one omits the parameter, but only if FastAPI then falls back to the same value (e.g. `None` for `param: int | None = None`). Otherwise, and for other values that cannot be sent (e.g. lists containing `None`, header or cookie values that are not printable ASCII or have surrounding whitespace, cookie values containing `;`, or path values with `.` or `..` segments), a `FastAPIClientUnencodableParamError` is raised before sending the request.
+
+Note that FastAPI does not coerce strings into literals, so it rejects every value of a `Literal[1]` parameter in these locations, unless it coerces the value itself, e.g. via `Annotated[Literal[1], BeforeValidator(int), Header()]`.
+
 For endpoints that can return errors (either because they define errors as [additional responses](https://fastapi.tiangolo.com/advanced/additional-responses/) or because they take parameters which can result in a Pydantic `ValidationError`) the return type of the generated endpoint method will be a union of all status codes with their respective response models.
 
 If you set the `raise_if_not_default_status` parameter to `True` or use `--raise-if-not-default-status` when generating your client, the return type will just be the default status code (i.e., `200 Ok` or the one defined via `status_code` in the endpoint's decorator) with its response model. Should the endpoint return a different status code, a `FastAPIClientNotDefaultStatusError` will be raised, which contains the response status code and deserialized data.
@@ -382,7 +386,7 @@ Returned (or yielded, for stream items) instead of raised when using `raise_if_u
 
 #### `FastAPIClientError`
 
-Base class of all exceptions raised by generated clients, i.e., of `FastAPIClientNotDefaultStatusError` and `FastAPIClientUnexpectedResponseError`.
+Base class of all exceptions raised by generated clients, i.e., of `FastAPIClientNotDefaultStatusError`, `FastAPIClientUnexpectedResponseError`, and `FastAPIClientUnencodableParamError`.
 
 #### `FastAPIClientNotDefaultStatusError`
   
@@ -400,6 +404,16 @@ Exception raised when using `raise_if_unexpected_response=True` (the default) an
 Instance attributes:
 
 - `result: FastAPIClientUnexpectedResponse`: The unexpected response received (typed as `FastAPIClientUnexpectedStatus`, `FastAPIClientUnexpectedBody`, or `FastAPIClientUnexpectedStreamItem` on the respective subclass)
+
+#### `FastAPIClientUnencodableParamError`
+
+Exception raised before sending a request if a path, query, header, or cookie parameter has a value that cannot be sent such that FastAPI parses it back into the same value (see [using a generated client](#using-a-generated-client)). Also subclasses `ValueError`. Its message never includes the value, since it might be a secret.
+
+Instance attributes:
+
+- `location: Literal["path", "query", "header", "cookie"]`: Where the parameter is sent
+- `name: str`: The name of the parameter on the wire (i.e., its alias, if any)
+- `value: Any`: The value that cannot be sent
 
 #### `FastAPIClientHTTPValidationError` and `FastAPIClientValidationError`
   
@@ -444,6 +458,7 @@ The following FastAPI features are not yet supported:
 - Endpoints using any of `response_model_include`, `response_model_exclude`, `response_model_by_alias`, `response_model_exclude_unset`, `response_model_exclude_defaults`, or `response_model_exclude_none`
 - Endpoints with `FileResponse`, `HTMLResponse`, `PlainTextResponse`, `RedirectResponse` or a custom response class
 - The `HTTPDigest` security scheme (challenge-response flow, not reducible to a static header)
+- Path parameter values that are empty or contain `/` (except for `{param:path}` parameters), since they change which route is matched
 
 ## Development
 

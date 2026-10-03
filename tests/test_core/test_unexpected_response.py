@@ -14,6 +14,7 @@ from fastapi_typed_client import (
     FastAPIClientError,
     FastAPIClientNotDefaultStatusError,
     FastAPIClientResult,
+    FastAPIClientUnencodableParamError,
     FastAPIClientUnexpectedBody,
     FastAPIClientUnexpectedBodyError,
     FastAPIClientUnexpectedStatus,
@@ -1042,6 +1043,10 @@ _NOT_DEFAULT_STATUS_ERROR = FastAPIClientNotDefaultStatusError(
     ),
 )
 
+_UNENCODABLE_PARAM_ERROR = FastAPIClientUnencodableParamError(
+    location="header", name="foo", value=None, reason="bar"
+)
+
 
 @pytest.mark.parametrize(
     ("error", "attribute"),
@@ -1087,6 +1092,13 @@ _NOT_DEFAULT_STATUS_ERROR = FastAPIClientNotDefaultStatusError(
             ),
             "result",
             id="UnexpectedStreamItemError.result",
+        ),
+        pytest.param(
+            _UNENCODABLE_PARAM_ERROR, "location", id="UnencodableParamError.location"
+        ),
+        pytest.param(_UNENCODABLE_PARAM_ERROR, "name", id="UnencodableParamError.name"),
+        pytest.param(
+            _UNENCODABLE_PARAM_ERROR, "value", id="UnencodableParamError.value"
         ),
     ],
 )

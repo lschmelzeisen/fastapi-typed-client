@@ -1,3 +1,4 @@
+import urllib.parse
 from base64 import b64encode
 from collections.abc import (
     AsyncGenerator,
@@ -5,10 +6,11 @@ from collections.abc import (
     Generator,
     Iterator,
     Mapping,
-    MutableMapping,
     Sequence,
 )
 from contextlib import asynccontextmanager, contextmanager
+from datetime import timedelta
+from decimal import Decimal
 from http import HTTPMethod, HTTPStatus
 from typing import Any, Literal, NamedTuple, Self, TypedDict, override
 from warnings import warn
@@ -25,19 +27,30 @@ from httpx2 import (
     Timeout,
 )
 from httpx2._types import FileTypes
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    JsonValue,
+    SecretBytes,
+    SecretStr,
+    TypeAdapter,
+    ValidationError,
+)
+from pydantic_core import to_jsonable_python
 
 # List all imports of this file for usage by _generator.py here.
 _IMPORTS = [
     Any,
     ConfigDict,
+    Decimal,
     HTTPMethod,
     HTTPStatus,
     Literal,
     Mapping,
-    MutableMapping,
     NamedTuple,
     Response,
+    SecretBytes,
+    SecretStr,
     Sequence,
     ServerSentEvent,
     Timeout,
@@ -46,6 +59,8 @@ _IMPORTS = [
     b64encode,
     jsonable_encoder,
     override,
+    timedelta,
+    to_jsonable_python,
     warn,
 ]
 _IMPORTS_VALIDATION_ERROR = [BaseModel, Sequence]
@@ -215,6 +230,34 @@ class FastAPIClientUnexpectedStreamItemError(FastAPIClientUnexpectedResponseErro
         return self._stream_item_result
 
 
+class FastAPIClientUnencodableParamError(FastAPIClientError, ValueError):
+    def __init__(
+        self,
+        *,
+        location: Literal["path", "query", "header", "cookie"],
+        name: str,
+        value: Any,  # noqa: ANN401
+        reason: str,
+    ) -> None:
+        # The message deliberately omits the value, as it might be a secret.
+        super().__init__(f"Cannot send {location} param `{name}`: {reason}.")
+        self._location = location
+        self._name = name
+        self._value = value
+
+    @property
+    def location(self) -> Literal["path", "query", "header", "cookie"]:
+        return self._location
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def value(self) -> Any:  # noqa: ANN401
+        return self._value
+
+
 class FastAPIClientSecurityParam(NamedTuple):
     kind: Literal[
         "http_bearer",
@@ -255,7 +298,7 @@ class FastAPIClientBase:
             yield cls(client)
 
     @staticmethod
-    def _filter_and_encode_params(
+    def _filter_and_encode_body_params(
         params: Mapping[str, Any] | None,
     ) -> dict[str, Any] | None:
         if params is None:
@@ -306,17 +349,105 @@ class FastAPIClientBase:
                 form[name] = encoded
         return form or None
 
+    @classmethod
+    def _encode_params(
+        cls,
+        location: Literal["path", "query", "header", "cookie"],
+        params: Mapping[str, Any] | None,
+        param_defaults: Mapping[str, Any] | None = None,
+    ) -> list[tuple[str, str]]:
+        # Encode each value into the strings that FastAPI parses back into it, with
+        # lists becoming repeated query params or header lines. `param_defaults` holds
+        # the server-side defaults that have no wire representation (`None` and `[]`),
+        # for which omitting the param is equivalent.
+        defaults = param_defaults or {}
+        result: list[tuple[str, str]] = []
+        for name, value in (params or {}).items():
+            if value is FASTAPI_CLIENT_NOT_REQUIRED:
+                continue
+            try:
+                encoded = jsonable_encoder(
+                    value,
+                    custom_encoder={
+                        Decimal: str,
+                        SecretStr: SecretStr.get_secret_value,
+                        SecretBytes: lambda secret: secret.get_secret_value().decode(),
+                        timedelta: to_jsonable_python,  # ISO 8601 instead of seconds.
+                    },
+                )
+            except ValueError as e:
+                raise FastAPIClientUnencodableParamError(
+                    location=location,
+                    name=name,
+                    value=value,
+                    reason=f"values of type `{type(value).__name__}` cannot be encoded",
+                ) from e
+            if encoded is None or encoded == []:
+                if name in defaults and defaults[name] == encoded:
+                    continue
+                raise FastAPIClientUnencodableParamError(
+                    location=location,
+                    name=name,
+                    value=value,
+                    reason=(
+                        f"`{encoded!r}` cannot be sent, and the param is required or "
+                        "has a different default"
+                    ),
+                )
+            items = (
+                encoded
+                if isinstance(encoded, list) and location in ("query", "header")
+                else [encoded]
+            )
+            result.extend(
+                (name, cls._encode_param_item(location, name, value, item))
+                for item in items
+            )
+        return result
+
+    @staticmethod
+    def _encode_param_item(
+        location: Literal["path", "query", "header", "cookie"],
+        name: str,
+        value: Any,  # noqa: ANN401
+        item: Any,  # noqa: ANN401
+    ) -> str:
+        # Path and query values get percent-encoded, except for dot segments, which
+        # get normalized away. httpx2 rejects header and cookie values that aren't
+        # ASCII, servers strip surrounding whitespace from them, and Starlette splits
+        # cookies at `;` and unquotes their values.
+        encoded = ("true" if item else "false") if isinstance(item, bool) else str(item)
+        if not isinstance(item, str | int | float):
+            reason = f"values of type `{type(item).__name__}` cannot be encoded"
+        elif location == "path" and {".", ".."} & set(encoded.split("/")):
+            reason = "path values cannot contain `.` or `..` segments"
+        elif location in ("path", "query"):
+            return encoded
+        elif not encoded.isascii() or not encoded.replace("\t", " ").isprintable():
+            reason = f"{location} values must be printable ASCII"
+        elif encoded != encoded.strip(" \t"):
+            reason = f"{location} values cannot have leading or trailing whitespace"
+        elif location == "cookie" and (
+            ";" in encoded or (len(encoded) > 1 and encoded[0] == encoded[-1] == '"')
+        ):
+            reason = "cookie values cannot contain `;` or be enclosed in double quotes"
+        else:
+            return encoded
+        raise FastAPIClientUnencodableParamError(
+            location=location, name=name, value=value, reason=reason
+        )
+
     @staticmethod
     def _apply_security_params(
         security_params: Sequence[FastAPIClientSecurityParam] | None,
-        header_params: MutableMapping[str, Any],
-        cookie_params: MutableMapping[str, Any],
-        query_params: MutableMapping[str, Any],
+        header_params: list[tuple[str, str]],
+        cookie_params: list[tuple[str, str]],
+        query_params: list[tuple[str, str]],
     ) -> None:
         for kind, name, value in security_params or ():
             if value is FASTAPI_CLIENT_NOT_REQUIRED or value is None:
                 continue
-            target: MutableMapping[str, Any]
+            target: list[tuple[str, str]]
             encoded: str
             if kind == "http_bearer" and isinstance(value, str):
                 target, encoded = header_params, f"Bearer {value}"
@@ -334,12 +465,12 @@ class FastAPIClientBase:
                     f"Security param `{name}` of kind `{kind}` has "
                     f"incompatible value type `{type(value).__name__}`."
                 )
-            if name in target and target[name] is not FASTAPI_CLIENT_NOT_REQUIRED:
+            if any(key == name for key, _ in target):
                 raise RuntimeError(
                     f"Security param `{name}` conflicts with an already-set "
                     f"{kind.split('_', 1)[0]} param of the same name."
                 )
-            target[name] = encoded
+            target.append((name, encoded))
 
     def _route_handler(
         self,
@@ -350,8 +481,11 @@ class FastAPIClientBase:
         models: Mapping[HTTPStatus, Any],
         path_params: Mapping[str, Any] | None = None,
         query_params: Mapping[str, Any] | None = None,
+        query_param_defaults: Mapping[str, Any] | None = None,
         header_params: Mapping[str, Any] | None = None,
+        header_param_defaults: Mapping[str, Any] | None = None,
         cookie_params: Mapping[str, Any] | None = None,
+        cookie_param_defaults: Mapping[str, Any] | None = None,
         body_params: Mapping[str, Any] | None = None,
         file_params: Mapping[str, Any] | None = None,
         form_params: Mapping[str, Any] | None = None,
@@ -373,17 +507,12 @@ class FastAPIClientBase:
             client_exts = {}
 
         url = path
-        for param, value in (self._filter_and_encode_params(path_params) or {}).items():
-            value_str = (
-                f"{value:0.20f}".rstrip("0").rstrip(".")
-                if isinstance(value, float)
-                else str(value)
-            )
-            url = url.replace(f"{{{param}}}", value_str)
+        for name, value in self._encode_params("path", path_params):
+            url = url.replace(f"{{{name}}}", urllib.parse.quote(value))
 
-        headers = self._filter_and_encode_params(header_params) or {}
-        cookies = self._filter_and_encode_params(cookie_params) or {}
-        queries = self._filter_and_encode_params(query_params) or {}
+        queries = self._encode_params("query", query_params, query_param_defaults)
+        headers = self._encode_params("header", header_params, header_param_defaults)
+        cookies = self._encode_params("cookie", cookie_params, cookie_param_defaults)
         self._apply_security_params(security_params, headers, cookies, queries)
         if cookies:
             # Mirror httpx2's per-request-cookies DeprecationWarning ourselves
@@ -419,7 +548,9 @@ class FastAPIClientBase:
             request = self.client.build_request(
                 method.name,
                 url,
-                params=queries or None,
+                # httpx2 types query params as a `tuple` of items or an (invariant)
+                # `list` of `PrimitiveData` items, so `queries` is passed as a `tuple`.
+                params=tuple(queries) or None,
                 headers=headers or None,
                 cookies=cookies or None,
                 data=form,
@@ -427,13 +558,13 @@ class FastAPIClientBase:
                 timeout=timeout,
             )
         else:
-            body = self._filter_and_encode_params(body_params)
+            body = self._filter_and_encode_body_params(body_params)
             if body and not is_body_embedded:
                 body = next(iter(body.values()))
             request = self.client.build_request(
                 method.name,
                 url,
-                params=queries or None,
+                params=tuple(queries) or None,
                 headers=headers or None,
                 cookies=cookies or None,
                 json=body,
@@ -709,7 +840,7 @@ class FastAPIClientAsyncBase:
             yield cls(client)
 
     @staticmethod
-    def _filter_and_encode_params(
+    def _filter_and_encode_body_params(
         params: Mapping[str, Any] | None,
     ) -> dict[str, Any] | None:
         if params is None:
@@ -760,17 +891,105 @@ class FastAPIClientAsyncBase:
                 form[name] = encoded
         return form or None
 
+    @classmethod
+    def _encode_params(
+        cls,
+        location: Literal["path", "query", "header", "cookie"],
+        params: Mapping[str, Any] | None,
+        param_defaults: Mapping[str, Any] | None = None,
+    ) -> list[tuple[str, str]]:
+        # Encode each value into the strings that FastAPI parses back into it, with
+        # lists becoming repeated query params or header lines. `param_defaults` holds
+        # the server-side defaults that have no wire representation (`None` and `[]`),
+        # for which omitting the param is equivalent.
+        defaults = param_defaults or {}
+        result: list[tuple[str, str]] = []
+        for name, value in (params or {}).items():
+            if value is FASTAPI_CLIENT_NOT_REQUIRED:
+                continue
+            try:
+                encoded = jsonable_encoder(
+                    value,
+                    custom_encoder={
+                        Decimal: str,
+                        SecretStr: SecretStr.get_secret_value,
+                        SecretBytes: lambda secret: secret.get_secret_value().decode(),
+                        timedelta: to_jsonable_python,  # ISO 8601 instead of seconds.
+                    },
+                )
+            except ValueError as e:
+                raise FastAPIClientUnencodableParamError(
+                    location=location,
+                    name=name,
+                    value=value,
+                    reason=f"values of type `{type(value).__name__}` cannot be encoded",
+                ) from e
+            if encoded is None or encoded == []:
+                if name in defaults and defaults[name] == encoded:
+                    continue
+                raise FastAPIClientUnencodableParamError(
+                    location=location,
+                    name=name,
+                    value=value,
+                    reason=(
+                        f"`{encoded!r}` cannot be sent, and the param is required or "
+                        "has a different default"
+                    ),
+                )
+            items = (
+                encoded
+                if isinstance(encoded, list) and location in ("query", "header")
+                else [encoded]
+            )
+            result.extend(
+                (name, cls._encode_param_item(location, name, value, item))
+                for item in items
+            )
+        return result
+
+    @staticmethod
+    def _encode_param_item(
+        location: Literal["path", "query", "header", "cookie"],
+        name: str,
+        value: Any,  # noqa: ANN401
+        item: Any,  # noqa: ANN401
+    ) -> str:
+        # Path and query values get percent-encoded, except for dot segments, which
+        # get normalized away. httpx2 rejects header and cookie values that aren't
+        # ASCII, servers strip surrounding whitespace from them, and Starlette splits
+        # cookies at `;` and unquotes their values.
+        encoded = ("true" if item else "false") if isinstance(item, bool) else str(item)
+        if not isinstance(item, str | int | float):
+            reason = f"values of type `{type(item).__name__}` cannot be encoded"
+        elif location == "path" and {".", ".."} & set(encoded.split("/")):
+            reason = "path values cannot contain `.` or `..` segments"
+        elif location in ("path", "query"):
+            return encoded
+        elif not encoded.isascii() or not encoded.replace("\t", " ").isprintable():
+            reason = f"{location} values must be printable ASCII"
+        elif encoded != encoded.strip(" \t"):
+            reason = f"{location} values cannot have leading or trailing whitespace"
+        elif location == "cookie" and (
+            ";" in encoded or (len(encoded) > 1 and encoded[0] == encoded[-1] == '"')
+        ):
+            reason = "cookie values cannot contain `;` or be enclosed in double quotes"
+        else:
+            return encoded
+        raise FastAPIClientUnencodableParamError(
+            location=location, name=name, value=value, reason=reason
+        )
+
     @staticmethod
     def _apply_security_params(
         security_params: Sequence[FastAPIClientSecurityParam] | None,
-        header_params: MutableMapping[str, Any],
-        cookie_params: MutableMapping[str, Any],
-        query_params: MutableMapping[str, Any],
+        header_params: list[tuple[str, str]],
+        cookie_params: list[tuple[str, str]],
+        query_params: list[tuple[str, str]],
     ) -> None:
         for kind, name, value in security_params or ():
             if value is FASTAPI_CLIENT_NOT_REQUIRED or value is None:
                 continue
-            target: MutableMapping[str, Any]
+            target: list[tuple[str, str]]
             encoded: str
             if kind == "http_bearer" and isinstance(value, str):
                 target, encoded = header_params, f"Bearer {value}"
@@ -788,12 +1007,12 @@ class FastAPIClientAsyncBase:
                     f"Security param `{name}` of kind `{kind}` has "
                     f"incompatible value type `{type(value).__name__}`."
                 )
-            if name in target and target[name] is not FASTAPI_CLIENT_NOT_REQUIRED:
+            if any(key == name for key, _ in target):
                 raise RuntimeError(
                     f"Security param `{name}` conflicts with an already-set "
                     f"{kind.split('_', 1)[0]} param of the same name."
                 )
-            target[name] = encoded
+            target.append((name, encoded))
 
     async def _route_handler(
         self,
@@ -804,8 +1023,11 @@ class FastAPIClientAsyncBase:
         models: Mapping[HTTPStatus, Any],
         path_params: Mapping[str, Any] | None = None,
         query_params: Mapping[str, Any] | None = None,
+        query_param_defaults: Mapping[str, Any] | None = None,
         header_params: Mapping[str, Any] | None = None,
+        header_param_defaults: Mapping[str, Any] | None = None,
         cookie_params: Mapping[str, Any] | None = None,
+        cookie_param_defaults: Mapping[str, Any] | None = None,
         body_params: Mapping[str, Any] | None = None,
         file_params: Mapping[str, Any] | None = None,
         form_params: Mapping[str, Any] | None = None,
@@ -827,17 +1049,12 @@ class FastAPIClientAsyncBase:
             client_exts = {}
 
         url = path
-        for param, value in (self._filter_and_encode_params(path_params) or {}).items():
-            value_str = (
-                f"{value:0.20f}".rstrip("0").rstrip(".")
-                if isinstance(value, float)
-                else str(value)
-            )
-            url = url.replace(f"{{{param}}}", value_str)
+        for name, value in self._encode_params("path", path_params):
+            url = url.replace(f"{{{name}}}", urllib.parse.quote(value))
 
-        headers = self._filter_and_encode_params(header_params) or {}
-        cookies = self._filter_and_encode_params(cookie_params) or {}
-        queries = self._filter_and_encode_params(query_params) or {}
+        queries = self._encode_params("query", query_params, query_param_defaults)
+        headers = self._encode_params("header", header_params, header_param_defaults)
+        cookies = self._encode_params("cookie", cookie_params, cookie_param_defaults)
         self._apply_security_params(security_params, headers, cookies, queries)
         if cookies:
             # Mirror httpx2's per-request-cookies DeprecationWarning ourselves
@@ -856,7 +1073,9 @@ class FastAPIClientAsyncBase:
             request = self.client.build_request(
                 method.name,
                 url,
-                params=queries or None,
+                # httpx2 types query params as a `tuple` of items or an (invariant)
+                # `list` of `PrimitiveData` items, so `queries` is passed as a `tuple`.
+                params=tuple(queries) or None,
                 headers=headers or None,
                 cookies=cookies or None,
                 data=form,
@@ -864,13 +1083,13 @@ class FastAPIClientAsyncBase:
                 timeout=client_exts.get("timeout", USE_CLIENT_DEFAULT),
             )
         else:
-            body = self._filter_and_encode_params(body_params)
+            body = self._filter_and_encode_body_params(body_params)
             if body and not is_body_embedded:
                 body = next(iter(body.values()))
             request = self.client.build_request(
                 method.name,
                 url,
-                params=queries or None,
+                params=tuple(queries) or None,
                 headers=headers or None,
                 cookies=cookies or None,
                 json=body,

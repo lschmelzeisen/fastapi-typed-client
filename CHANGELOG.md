@@ -13,15 +13,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - With the new `raise_if_unexpected_response=False` parameter of generated client methods (or `--no-raise-if-unexpected-response` when generating), they are instead returned (or yielded) as the new `FastAPIClientUnexpectedStatus`, `FastAPIClientUnexpectedBody`, or `FastAPIClientUnexpectedStreamItem` (union alias `FastAPIClientUnexpectedResponse`), which are added to the return types.
   - Either way, they take precedence over `raise_if_not_default_status`.
 - New exception base class `FastAPIClientError`.
+- New `FastAPIClientUnencodableParamError` (subclassing `FastAPIClientError` and `ValueError`), raised before sending a request if a path, query, header, or cookie parameter value can't be sent such that FastAPI parses it back into the same value. Previously, such values were silently altered or raised less specific errors, e.g. cookie values containing `;` (truncated), header or cookie values that aren't printable ASCII or have surrounding whitespace, and path values with `.` or `..` segments.
 
 ### Changed
 
 - Bodies that do not validate against the declared model (including stream items) now raise `FastAPIClientUnexpectedBodyError` (or `FastAPIClientUnexpectedStreamItemError`) instead of Pydantic's `ValidationError`, which is still available as `result.validation_error`.
 - `FastAPIClientNotDefaultStatusError` now subclasses `FastAPIClientError`, and its attributes are now read-only.
 - Generated client methods now always have overloads (also for routes with a single response).
+- Booleans in path parameters are now sent as `true`/`false` (instead of `True`/`False`), like in other parameter locations.
+- `None` or an empty list for a query, header, or cookie parameter is now omitted if FastAPI then falls back to the same value (e.g. `None` for `param: int | None = None`), and raises otherwise. Previously, `None` was sent as an empty query parameter, which FastAPI parses as `""` or rejects, and empty lists were always omitted, so FastAPI used the parameter's default even if it differs from `[]`.
 
 ### Fixed
 
+- Header and cookie parameters of non-string types (e.g. `int`, `bool`, or `list[int]`) are now sent instead of raising `TypeError` ([#2](https://github.com/lschmelzeisen/fastapi-typed-client/issues/2)), with list-typed headers sent as one header line per item.
+- Path values are now percent-encoded (except for `/`), so values containing `?` or `#` are no longer truncated, and floats in paths no longer lose precision (e.g. `1e-25` was sent as `0`).
+- `Decimal`, `timedelta`, and `SecretStr`/`SecretBytes` parameter values are now sent correctly (previously, `Decimal`s lost precision, `timedelta`s were sent as seconds, which FastAPI rejects, and secrets were sent masked).
 - On streaming routes, responses with a non-default status code now retain their body (previously, `response.text` raised `ResponseNotRead`), and the streaming item type in the generated return type is now applied to the default response (previously, to the response with the lowest status code).
 
 ## [0.6.0](https://github.com/lschmelzeisen/fastapi-typed-client/releases/tag/v0.6.0) - 2026-08-27

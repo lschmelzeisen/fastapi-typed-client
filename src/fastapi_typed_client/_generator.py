@@ -12,6 +12,8 @@ from types import NoneType
 from typing import Any, Literal, NamedTuple, get_args, get_origin, overload
 from warnings import warn
 
+from pydantic_core import PydanticUndefined
+
 from ._parser import (
     Route,
     RouteParam,
@@ -36,6 +38,7 @@ from .client import (
     FastAPIClientResult,
     FastAPIClientSecurityParam,
     FastAPIClientSSE,
+    FastAPIClientUnencodableParamError,
     FastAPIClientUnexpectedBody,
     FastAPIClientUnexpectedBodyError,
     FastAPIClientUnexpectedResponse,
@@ -63,6 +66,7 @@ class _Identifiers(NamedTuple):
     unexpected_status_error: str
     unexpected_body_error: str
     unexpected_stream_item_error: str
+    unencodable_param_error: str
     security_param: str
     sse: str
     file: str
@@ -90,6 +94,7 @@ class _Identifiers(NamedTuple):
             FastAPIClientUnexpectedStreamItemError.__name__: (
                 self.unexpected_stream_item_error
             ),
+            FastAPIClientUnencodableParamError.__name__: self.unencodable_param_error,
             FastAPIClientSecurityParam.__name__: self.security_param,
             FastAPIClientSSE.__name__: self.sse,
             FastAPIClientFile.__name__: self.file,
@@ -155,6 +160,7 @@ class ClientCodeGenerator:
                 unexpected_stream_item_error=(
                     FastAPIClientUnexpectedStreamItemError.__name__
                 ),
+                unencodable_param_error=FastAPIClientUnencodableParamError.__name__,
                 security_param=FastAPIClientSecurityParam.__name__,
                 sse=FastAPIClientSSE.__name__,
                 file=FastAPIClientFile.__name__,
@@ -177,6 +183,7 @@ class ClientCodeGenerator:
             unexpected_status_error=f"{self._title}UnexpectedStatusError",
             unexpected_body_error=f"{self._title}UnexpectedBodyError",
             unexpected_stream_item_error=f"{self._title}UnexpectedStreamItemError",
+            unencodable_param_error=f"{self._title}UnencodableParamError",
             security_param=f"{self._title}SecurityParam",
             sse=f"{self._title}SSE",
             file=f"{self._title}File",
@@ -405,6 +412,21 @@ class ClientCodeGenerator:
             for param in kind_params:
                 code += f"    {dq_str_repr(param.alias or param.name)}: {param.name},\n"
             code += "},\n"
+            # The client base needs to know the server-side defaults that have no wire
+            # representation, to decide whether passing them can just omit the param.
+            defaults_params = [
+                param
+                for param in kind_params
+                if param.unencodable_default is not PydanticUndefined
+            ]
+            if defaults_params:
+                code += f"{param_kind.name.lower()}_param_defaults={{\n"
+                for param in defaults_params:
+                    code += (
+                        f"    {dq_str_repr(param.alias or param.name)}: "
+                        f"{param.unencodable_default!r},\n"
+                    )
+                code += "},\n"
         return code
 
     def _get_security_params_code(self, params: Sequence[RouteParam]) -> str:
@@ -532,6 +554,10 @@ class _BoilerplateCodeGenerator:
         # hard-code those here.
         self._impr.add_import(Import(module="httpx2", name="USE_CLIENT_DEFAULT"))
 
+        # Import the module instead of `quote` itself, so that it can't collide with
+        # module-level names of the app (e.g. a model called `quote`).
+        self._impr.add_import(Import(module="urllib.parse"))
+
         # `JsonValue` is a `typing_extensions.TypeAliasType`, which the import
         # registry's type-usage path can't resolve, so it must be imported by name.
         self._impr.add_import(Import(module="pydantic", name="JsonValue"))
@@ -608,6 +634,7 @@ class _BoilerplateCodeGenerator:
             getsource(FastAPIClientUnexpectedStatusError),
             getsource(FastAPIClientUnexpectedBodyError),
             getsource(FastAPIClientUnexpectedStreamItemError),
+            getsource(FastAPIClientUnencodableParamError),
             getsource(FastAPIClientSecurityParam),
             getsource(FastAPIClientSSE),
             "FASTAPI_CLIENT_NOT_REQUIRED: Any = ...\n",
