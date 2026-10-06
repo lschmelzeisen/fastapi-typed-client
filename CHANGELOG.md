@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Generated client methods now always have overloads (also for routes with a single response).
 - Booleans in path parameters are now sent as `true`/`false` (instead of `True`/`False`), like in other parameter locations.
 - `None` or an empty list for a query, header, or cookie parameter is now omitted if FastAPI then falls back to the same value (e.g. `None` for `param: int | None = None`), and raises otherwise. Previously, `None` was sent as an empty query parameter, which FastAPI parses as `""` or rejects, and empty lists were always omitted, so FastAPI used the parameter's default even if it differs from `[]`.
+- Update minimum required version of supported dependencies (`fastapi>=0.142.2`, `httpx2>=2.13.1`, `pydantic>=2.13.5`, `typer>=0.27.2`).
 
 ### Fixed
 
